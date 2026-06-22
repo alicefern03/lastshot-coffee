@@ -11,6 +11,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_CdZkLzNYjlCeiJ_rt8cb-g_xd_J8EPd";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const SHOP_NAME = "Lastshot Coffee"; // แก้ชื่อร้านได้ตรงนี้
+const RECEIPT_WIDTH_MM = 80; // ขนาดกระดาษใบเสร็จ: ใส่ 58 ถ้าใช้เครื่องพิมพ์ม้วน 58mm หรือ 80 ถ้าใช้ม้วน 80mm
 
 // ---------- Helpers ----------
 const THB = (n) => "฿" + Number(n || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
@@ -632,13 +633,20 @@ function ReceiptModal({ order, onClose }) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4 print:bg-white print:p-0">
       <style>{`
         @media print {
+          @page {
+            size: ${RECEIPT_WIDTH_MM}mm auto;
+            margin: 0;
+          }
+          html, body { width: ${RECEIPT_WIDTH_MM}mm; margin: 0; padding: 0; }
           body * { visibility: hidden; }
           #receipt-print-area, #receipt-print-area * { visibility: visible; }
           #receipt-print-area {
             position: absolute;
             top: 0;
             left: 0;
-            width: 100%;
+            width: ${RECEIPT_WIDTH_MM}mm;
+            padding: 4mm;
+            font-size: 12px;
           }
           .no-print { display: none !important; }
         }
