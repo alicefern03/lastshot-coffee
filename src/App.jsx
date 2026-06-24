@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Coffee, Plus, Minus, Trash2, Package, Receipt, AlertTriangle, X, Check,
   TrendingUp, Edit2, Printer, ChevronLeft, ChevronRight, Settings, Bike, Store,
+  Image as ImageIcon,
 } from "lucide-react";
 
 // ============================================================
@@ -15,67 +16,56 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const SHOP_NAME = "Lastshot Coffee";
 const RECEIPT_WIDTH_MM = 80; // 58 หรือ 80
 
-// ---------- ช่องทางขาย ----------
-const CHANNELS = [
-  { id: "walkin", name: "หน้าร้าน", icon: Store, gp: 0 },
-  { id: "grab", name: "Grab", icon: Bike, gp: 30 },
-  { id: "lineman", name: "Lineman", icon: Bike, gp: 30 },
-  { id: "shopee", name: "Shopee Food", icon: Bike, gp: 25 },
-];
-
 // ---------- Helpers ----------
 const THB = (n) => "฿" + Number(n || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-// ราคาที่ควรตั้งในแอพ delivery เพื่อให้ได้กำไรเท่าหน้าร้าน หลังหัก GP%
 function suggestedChannelPrice(basePrice, gpPercent) {
   if (!gpPercent) return basePrice;
   const raw = basePrice / (1 - gpPercent / 100);
-  return Math.ceil(raw / 5) * 5; // ปัดขึ้นให้ลงท้ายด้วย 0/5
+  return Math.ceil(raw / 5) * 5;
 }
 
 const DEFAULT_CATEGORIES = [
   { id: "c1", name: "กาแฟ" },
   { id: "c2", name: "ชา" },
-  { id: "c3", name: "เมนูร้อน" },
 ];
 
-const DEFAULT_MENU = [
-  { id: "m1", name: "เอสเปรสโซ่", price: 45, categoryId: "c1", recipe: [{ ing: "i1", qty: 18 }], addonGroups: [] },
-  { id: "m2", name: "อเมริกาโน่", price: 55, categoryId: "c1", recipe: [{ ing: "i1", qty: 18 }], addonGroups: [] },
-  {
-    id: "m3", name: "ลาเต้", price: 65, categoryId: "c1",
-    recipe: [{ ing: "i1", qty: 18 }, { ing: "i2", qty: 150 }],
-    addonGroups: [
-      {
-        id: "ag1", name: "เลือกเมล็ดกาแฟ", multi: false,
-        options: [{ id: "o1", name: "เมล็ดปกติ", price: 0 }, { id: "o2", name: "เมล็ดพิเศษ (Single Origin)", price: 15 }],
-      },
-      {
-        id: "ag2", name: "นมทางเลือก", multi: false,
-        options: [{ id: "o3", name: "นมสด", price: 0 }, { id: "o4", name: "นมโอ๊ต", price: 20 }, { id: "o5", name: "นมอัลมอนด์", price: 20 }],
-      },
-    ],
-  },
-  { id: "m4", name: "คาปูชิโน่", price: 65, categoryId: "c1", recipe: [{ ing: "i1", qty: 18 }, { ing: "i2", qty: 100 }], addonGroups: [] },
-  {
-    id: "m5", name: "ชาเขียวลาเต้", price: 60, categoryId: "c2",
-    recipe: [{ ing: "i3", qty: 10 }, { ing: "i2", qty: 150 }],
-    addonGroups: [
-      {
-        id: "ag3", name: "เกรดมัทฉะ", multi: false,
-        options: [{ id: "o6", name: "เกรดทั่วไป", price: 0 }, { id: "o7", name: "เกรดพรีเมียม", price: 25 }],
-      },
-    ],
-  },
-];
 const DEFAULT_STOCK = [
   { id: "i1", name: "เมล็ดกาแฟ", unit: "g", qty: 5000, low: 500 },
   { id: "i2", name: "นมสด", unit: "ml", qty: 6000, low: 1000 },
   { id: "i3", name: "ผงชาเขียว", unit: "g", qty: 800, low: 100 },
-  { id: "i4", name: "แก้วร้อน", unit: "ใบ", qty: 200, low: 30 },
 ];
-const DEFAULT_SETTINGS = { gp: { grab: 30, lineman: 30, shopee: 25 } };
+
+const DEFAULT_MENU = [
+  { id: "m1", name: "เอสเปรสโซ่", price: 45, categoryId: "c1", recipe: [{ ing: "i1", qty: 18 }], addonGroupIds: [] },
+  { id: "m2", name: "ลาเต้", price: 65, categoryId: "c1", recipe: [{ ing: "i1", qty: 18 }, { ing: "i2", qty: 150 }], addonGroupIds: ["ag1"] },
+  { id: "m3", name: "ชาเขียวลาเต้", price: 60, categoryId: "c2", recipe: [{ ing: "i3", qty: 10 }, { ing: "i2", qty: 150 }], addonGroupIds: [] },
+];
+
+// ช่องทางขายเริ่มต้น — "walkin" เป็นช่องทางพื้นฐานที่ลบไม่ได้
+const DEFAULT_CHANNELS = [
+  { id: "walkin", name: "หน้าร้าน", gp: 0, builtin: true },
+  { id: "grab", name: "Grab", gp: 30 },
+  { id: "lineman", name: "Lineman", gp: 30 },
+  { id: "shopee", name: "Shopee Food", gp: 25 },
+];
+
+// คลังตัวเลือกเสริม ใส่ครั้งเดียว ผูกกับหลายเมนูได้
+const DEFAULT_ADDON_GROUPS = [
+  {
+    id: "ag1", name: "นมทางเลือก", multi: false,
+    options: [{ id: "o1", name: "นมสด", price: 0 }, { id: "o2", name: "นมโอ๊ต", price: 20 }, { id: "o3", name: "นมอัลมอนด์", price: 20 }],
+  },
+];
+
+const DEFAULT_SETTINGS = {
+  logoUrl: "",
+  primaryColor: "#2b1d14",
+  accentColor: "#d4a574",
+  channels: DEFAULT_CHANNELS,
+  addonGroups: DEFAULT_ADDON_GROUPS,
+};
 
 // ============================================================
 // 2) อ่าน/เขียนข้อมูลจาก Supabase
@@ -92,12 +82,12 @@ async function saveData(key, value) {
   const { error } = await supabase.from("app_data").upsert({ key, value });
   if (error) console.error("save error", key, error);
 }
-async function uploadMenuImage(file) {
+async function uploadImage(file, bucket = "menu-images") {
   const ext = file.name.split(".").pop();
   const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const { error } = await supabase.storage.from("menu-images").upload(path, file);
+  const { error } = await supabase.storage.from(bucket).upload(path, file);
   if (error) throw error;
-  const { data } = supabase.storage.from("menu-images").getPublicUrl(path);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
   return data.publicUrl;
 }
 
@@ -119,10 +109,15 @@ export default function CoffeeShopSystem() {
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showAddStock, setShowAddStock] = useState(false);
   const [receiptOrder, setReceiptOrder] = useState(null);
-  const [addonItem, setAddonItem] = useState(null); // menu item being configured before adding to cart
+  const [addonItem, setAddonItem] = useState(null);
   const [editCategory, setEditCategory] = useState(null);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [confirmDeleteOrder, setConfirmDeleteOrder] = useState(null);
+  const [lowStockConfirmItem, setLowStockConfirmItem] = useState(null); // {item} pending confirm
+  const [editChannel, setEditChannel] = useState(null);
+  const [showAddChannel, setShowAddChannel] = useState(false);
+  const [editAddonGroup, setEditAddonGroup] = useState(null);
+  const [showAddAddonGroup, setShowAddAddonGroup] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -139,6 +134,8 @@ export default function CoffeeShopSystem() {
         if (s === null) { s = DEFAULT_STOCK; await saveData("stock", s); }
         if (sl === null) { sl = []; await saveData("sales", sl); }
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
+        // migrate: ensure new settings fields exist for older saved settings
+        st = { ...DEFAULT_SETTINGS, ...st, channels: st.channels || DEFAULT_CHANNELS, addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS };
         setMenu(m);
         setCategories(c);
         setStock(s);
@@ -180,7 +177,9 @@ export default function CoffeeShopSystem() {
     return map;
   }, [stock]);
 
-  const gpForChannel = (chId) => (settings?.gp || {})[chId] || 0;
+  const channels = settings?.channels || DEFAULT_CHANNELS;
+  const addonGroupsLib = settings?.addonGroups || [];
+  const gpForChannel = (chId) => channels.find((c) => c.id === chId)?.gp || 0;
 
   const priceForChannel = (item, chId) => {
     if (chId === "walkin") return item.price;
@@ -189,7 +188,17 @@ export default function CoffeeShopSystem() {
     return suggestedChannelPrice(item.price, gpForChannel(chId));
   };
 
-  // ---- Cart: items may have chosen addons ----
+  // ---- ตรวจสต๊อกแบบไม่บล็อก แค่เตือน ----
+  const stockStatus = (item) => {
+    const missing = [];
+    (item.recipe || []).forEach((r) => {
+      const s = stockMap[r.ing];
+      if (!s || s.qty < r.qty) missing.push(s ? s.name : "วัตถุดิบที่ถูกลบไปแล้ว");
+    });
+    return { ok: missing.length === 0, missing };
+  };
+
+  // ---- Cart ----
   const addToCartDirect = (item, addons = [], unitPrice) => {
     const cartKey = item.id + "::" + addons.map((a) => a.id).sort().join(",");
     setCart((c) => {
@@ -199,8 +208,21 @@ export default function CoffeeShopSystem() {
     });
   };
 
+  const resolvedAddonGroupsForItem = (item) =>
+    (item.addonGroupIds || []).map((gid) => addonGroupsLib.find((g) => g.id === gid)).filter(Boolean);
+
   const handleItemClick = (item) => {
-    if (item.addonGroups && item.addonGroups.length > 0) {
+    const status = stockStatus(item);
+    if (!status.ok) {
+      setLowStockConfirmItem(item);
+      return;
+    }
+    proceedAddItem(item);
+  };
+
+  const proceedAddItem = (item) => {
+    const groups = resolvedAddonGroupsForItem(item);
+    if (groups.length > 0) {
       setAddonItem(item);
     } else {
       addToCartDirect(item, [], priceForChannel(item, channel));
@@ -216,7 +238,6 @@ export default function CoffeeShopSystem() {
   const lineTotal = (line) => (line.basePrice + line.addons.reduce((s, a) => s + a.price, 0)) * line.qty;
   const cartTotal = cart.reduce((s, line) => s + lineTotal(line), 0);
 
-  // reset cart & category view when switching channel
   const switchChannel = (chId) => {
     if (cart.length > 0 && chId !== channel) {
       if (!window.confirm("เปลี่ยนช่องทางจะล้างตะกร้าปัจจุบัน ดำเนินการต่อไหม?")) return;
@@ -239,12 +260,7 @@ export default function CoffeeShopSystem() {
       id: uid(),
       channel,
       items: cart.map((x) => ({
-        id: x.id,
-        name: x.name,
-        price: x.basePrice,
-        addons: x.addons,
-        qty: x.qty,
-        lineTotal: lineTotal(x),
+        id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x),
       })),
       total: cartTotal,
       time: new Date().toISOString(),
@@ -314,11 +330,49 @@ export default function CoffeeShopSystem() {
     await saveData("stock", newStock);
   };
 
-  // ---- Settings ops ----
-  const saveGp = async (chId, value) => {
-    const newSettings = { ...settings, gp: { ...settings.gp, [chId]: Number(value) || 0 } };
+  // ---- Settings: general ----
+  const updateSettings = async (patch) => {
+    const newSettings = { ...settings, ...patch };
     setSettings(newSettings);
     await saveData("settings", newSettings);
+  };
+
+  // ---- Settings: channels ----
+  const saveChannel = async (ch) => {
+    const list = settings.channels || [];
+    const newChannels = ch.id && list.some((c) => c.id === ch.id)
+      ? list.map((c) => (c.id === ch.id ? ch : c))
+      : [...list, { ...ch, id: uid() }];
+    await updateSettings({ channels: newChannels });
+    setEditChannel(null);
+    setShowAddChannel(false);
+    showToast("บันทึกช่องทางแล้ว");
+  };
+  const deleteChannel = async (id) => {
+    if (!window.confirm("ลบช่องทางนี้? ออเดอร์เก่าที่ใช้ช่องทางนี้จะยังแสดงผลตามปกติ")) return;
+    await updateSettings({ channels: settings.channels.filter((c) => c.id !== id) });
+  };
+
+  // ---- Settings: addon groups (library) ----
+  const saveAddonGroup = async (group) => {
+    const list = settings.addonGroups || [];
+    const newGroups = group.id && list.some((g) => g.id === group.id)
+      ? list.map((g) => (g.id === group.id ? group : g))
+      : [...list, { ...group, id: uid() }];
+    await updateSettings({ addonGroups: newGroups });
+    setEditAddonGroup(null);
+    setShowAddAddonGroup(false);
+    showToast("บันทึกตัวเลือกเสริมแล้ว");
+  };
+  const deleteAddonGroup = async (id) => {
+    if (menu.some((m) => (m.addonGroupIds || []).includes(id))) {
+      if (!window.confirm("ตัวเลือกเสริมนี้ถูกผูกกับเมนูอยู่ ลบแล้วเมนูจะไม่มีตัวเลือกนี้อีก ดำเนินการต่อไหม?")) return;
+    }
+    await updateSettings({ addonGroups: settings.addonGroups.filter((g) => g.id !== id) });
+    // also unlink from menu items
+    const newMenu = menu.map((m) => ({ ...m, addonGroupIds: (m.addonGroupIds || []).filter((gid) => gid !== id) }));
+    setMenu(newMenu);
+    await saveData("menu", newMenu);
   };
 
   const today = new Date().toDateString();
@@ -332,9 +386,7 @@ export default function CoffeeShopSystem() {
         <div className="max-w-md text-center">
           <AlertTriangle className="mx-auto text-red-500 mb-3" size={32} />
           <h2 className="font-bold text-lg mb-2">เชื่อมต่อฐานข้อมูลไม่ได้</h2>
-          <p className="text-sm text-[#8a7a68]">
-            ตรวจสอบว่าใส่ SUPABASE_URL และ SUPABASE_ANON_KEY ถูกต้อง และสร้างตาราง app_data แล้วในโปรเจกต์ Supabase
-          </p>
+          <p className="text-sm text-[#8a7a68]">ตรวจสอบว่าใส่ SUPABASE_URL และ SUPABASE_ANON_KEY ถูกต้อง</p>
         </div>
       </div>
     );
@@ -350,18 +402,24 @@ export default function CoffeeShopSystem() {
     );
   }
 
+  const primary = settings.primaryColor || "#2b1d14";
+  const accent = settings.accentColor || "#d4a574";
   const openCategory = categories.find((c) => c.id === openCategoryId);
   const itemsInOpenCategory = openCategoryId ? menu.filter((m) => m.categoryId === openCategoryId) : [];
 
   return (
     <div className="min-h-screen bg-[#fbf7f0] text-[#2b1d14]">
-      <header className="sticky top-0 z-20 bg-[#2b1d14] text-[#fbf7f0] shadow-md">
+      <header className="sticky top-0 z-20 text-[#fbf7f0] shadow-md" style={{ backgroundColor: primary }}>
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
-            <Coffee size={22} className="text-[#d4a574]" />
+            {settings.logoUrl ? (
+              <img src={settings.logoUrl} alt="logo" className="w-7 h-7 rounded-full object-cover" />
+            ) : (
+              <Coffee size={22} style={{ color: accent }} />
+            )}
             <span>{SHOP_NAME} — ระบบจัดการ</span>
           </div>
-          <nav className="flex gap-1 bg-[#1c1410] rounded-full p-1 flex-wrap">
+          <nav className="flex gap-1 rounded-full p-1 flex-wrap" style={{ backgroundColor: "#00000030" }}>
             {[
               ["pos", "ขายหน้าร้าน", Receipt],
               ["stock", "สต๊อก", Package],
@@ -372,9 +430,8 @@ export default function CoffeeShopSystem() {
               <button
                 key={key}
                 onClick={() => setTab(key)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                  tab === key ? "bg-[#d4a574] text-[#2b1d14]" : "text-[#cbb9a8] hover:text-white"
-                }`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors"
+                style={tab === key ? { backgroundColor: accent, color: primary } : { color: "#cbb9a8" }}
               >
                 <Icon size={15} />
                 <span className="hidden sm:inline">{label}</span>
@@ -395,24 +452,17 @@ export default function CoffeeShopSystem() {
         {tab === "pos" && (
           <div className="grid md:grid-cols-3 gap-6">
             <div className="md:col-span-2">
-              {/* Channel selector */}
               <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
-                {CHANNELS.map((ch) => {
-                  const Icon = ch.icon;
-                  return (
-                    <button
-                      key={ch.id}
-                      onClick={() => switchChannel(ch.id)}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border whitespace-nowrap transition-colors ${
-                        channel === ch.id
-                          ? "bg-[#2b1d14] text-white border-[#2b1d14]"
-                          : "bg-white text-[#5a4a3a] border-[#e3d2bd] hover:border-[#d4a574]"
-                      }`}
-                    >
-                      <Icon size={14} /> {ch.name}
-                    </button>
-                  );
-                })}
+                {channels.map((ch) => (
+                  <button
+                    key={ch.id}
+                    onClick={() => switchChannel(ch.id)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border whitespace-nowrap transition-colors"
+                    style={channel === ch.id ? { backgroundColor: primary, color: "#fff", borderColor: primary } : { backgroundColor: "#fff", color: "#5a4a3a", borderColor: "#e3d2bd" }}
+                  >
+                    {ch.id === "walkin" ? <Store size={14} /> : <Bike size={14} />} {ch.name}
+                  </button>
+                ))}
               </div>
 
               {!openCategoryId ? (
@@ -425,7 +475,7 @@ export default function CoffeeShopSystem() {
                         <button
                           key={cat.id}
                           onClick={() => setOpenCategoryId(cat.id)}
-                          className="text-left p-4 rounded-xl border border-[#e3d2bd] bg-white hover:border-[#d4a574] hover:shadow-md transition-all flex items-center justify-between"
+                          className="text-left p-4 rounded-xl border border-[#e3d2bd] bg-white hover:shadow-md transition-all flex items-center justify-between"
                         >
                           <div>
                             <div className="font-semibold">{cat.name}</div>
@@ -439,47 +489,34 @@ export default function CoffeeShopSystem() {
                 </>
               ) : (
                 <>
-                  <button
-                    onClick={() => setOpenCategoryId(null)}
-                    className="flex items-center gap-1 text-sm text-[#a6622f] mb-3 font-medium"
-                  >
+                  <button onClick={() => setOpenCategoryId(null)} className="flex items-center gap-1 text-sm mb-3 font-medium" style={{ color: accent }}>
                     <ChevronLeft size={16} /> กลับไปหมวดหมู่
                   </button>
                   <h2 className="font-bold text-lg mb-3">{openCategory?.name}</h2>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {itemsInOpenCategory.map((item) => {
-                      const canMake = (item.recipe || []).every((r) => {
-                        const s = stockMap[r.ing];
-                        return s && s.qty >= r.qty;
-                      });
+                      const status = stockStatus(item);
                       const price = priceForChannel(item, channel);
+                      const groups = resolvedAddonGroupsForItem(item);
                       return (
                         <button
                           key={item.id}
-                          disabled={!canMake}
                           onClick={() => handleItemClick(item)}
-                          className={`text-left p-3 rounded-xl border transition-all ${
-                            canMake
-                              ? "border-[#e3d2bd] bg-white hover:border-[#d4a574] hover:shadow-md active:scale-95"
-                              : "border-[#e3d2bd] bg-[#f5f1ea] opacity-50 cursor-not-allowed"
-                          }`}
+                          className="text-left p-3 rounded-xl border transition-all bg-white hover:shadow-md active:scale-95"
+                          style={{ borderColor: status.ok ? "#e3d2bd" : "#f0b88a" }}
                         >
                           {item.image ? (
                             <img src={item.image} alt={item.name} className="w-full h-20 object-cover rounded-lg mb-2" onError={(e) => (e.target.style.display = "none")} />
                           ) : (
                             <div className="w-full h-20 rounded-lg mb-2 bg-[#f5f1ea] flex items-center justify-center">
-                              <Coffee size={22} className="text-[#d4a574]" />
+                              <Coffee size={22} style={{ color: accent }} />
                             </div>
                           )}
                           <div className="font-semibold text-sm">{item.name}</div>
-                          {item.addonGroups?.length > 0 && (
-                            <div className="text-[10px] text-[#a6622f] mt-0.5">มีตัวเลือกเสริม</div>
-                          )}
-                          <div className="font-bold text-[#a6622f] mt-1.5">{THB(price)}</div>
-                          {channel !== "walkin" && (
-                            <div className="text-[10px] text-[#8a7a68]">(หน้าร้าน {THB(item.price)})</div>
-                          )}
-                          {!canMake && <div className="text-[10px] text-red-600 mt-1">วัตถุดิบไม่พอ</div>}
+                          {groups.length > 0 && <div className="text-[10px] mt-0.5" style={{ color: accent }}>มีตัวเลือกเสริม</div>}
+                          <div className="font-bold mt-1.5" style={{ color: "#a6622f" }}>{THB(price)}</div>
+                          {channel !== "walkin" && <div className="text-[10px] text-[#8a7a68]">(หน้าร้าน {THB(item.price)})</div>}
+                          {!status.ok && <div className="text-[10px] text-orange-600 mt-1">⚠ {status.missing.join(", ")} ใกล้หมด/ไม่พอ</div>}
                         </button>
                       );
                     })}
@@ -496,7 +533,7 @@ export default function CoffeeShopSystem() {
                 <Receipt size={18} /> ออเดอร์
               </h2>
               <div className="text-xs text-[#8a7a68] mb-3">
-                ช่องทาง: <span className="font-semibold text-[#a6622f]">{CHANNELS.find((c) => c.id === channel)?.name}</span>
+                ช่องทาง: <span className="font-semibold" style={{ color: "#a6622f" }}>{channels.find((c) => c.id === channel)?.name}</span>
               </div>
               {cart.length === 0 ? (
                 <p className="text-sm text-[#8a7a68] py-6 text-center">ยังไม่มีรายการ</p>
@@ -506,24 +543,14 @@ export default function CoffeeShopSystem() {
                     <div key={line.cartKey} className="flex items-center justify-between text-sm">
                       <div className="flex-1">
                         <div className="font-medium">{line.name}</div>
-                        {line.addons.length > 0 && (
-                          <div className="text-[11px] text-[#8a7a68]">
-                            {line.addons.map((a) => a.name).join(", ")}
-                          </div>
-                        )}
+                        {line.addons.length > 0 && <div className="text-[11px] text-[#8a7a68]">{line.addons.map((a) => a.name).join(", ")}</div>}
                         <div className="text-[#8a7a68]">{THB(line.basePrice + line.addons.reduce((s, a) => s + a.price, 0))}</div>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button onClick={() => changeQty(line.cartKey, -1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]">
-                          <Minus size={12} />
-                        </button>
+                        <button onClick={() => changeQty(line.cartKey, -1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]"><Minus size={12} /></button>
                         <span className="w-5 text-center">{line.qty}</span>
-                        <button onClick={() => changeQty(line.cartKey, 1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]">
-                          <Plus size={12} />
-                        </button>
-                        <button onClick={() => removeFromCart(line.cartKey)} className="ml-1 text-red-400 hover:text-red-600">
-                          <Trash2 size={14} />
-                        </button>
+                        <button onClick={() => changeQty(line.cartKey, 1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]"><Plus size={12} /></button>
+                        <button onClick={() => removeFromCart(line.cartKey)} className="ml-1 text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
                       </div>
                     </div>
                   ))}
@@ -531,12 +558,13 @@ export default function CoffeeShopSystem() {
               )}
               <div className="border-t border-[#e3d2bd] pt-3 flex items-center justify-between font-bold">
                 <span>รวม</span>
-                <span className="text-[#a6622f]">{THB(cartTotal)}</span>
+                <span style={{ color: "#a6622f" }}>{THB(cartTotal)}</span>
               </div>
               <button
                 onClick={checkout}
                 disabled={cart.length === 0}
-                className="mt-3 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold disabled:opacity-40 hover:bg-[#3d2a1c] transition-colors"
+                className="mt-3 w-full text-white rounded-lg py-2.5 font-semibold disabled:opacity-40 transition-colors"
+                style={{ backgroundColor: primary }}
               >
                 ชำระเงิน
               </button>
@@ -548,7 +576,7 @@ export default function CoffeeShopSystem() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-bold text-lg">สต๊อกวัตถุดิบ</h2>
-              <button onClick={() => setShowAddStock(true)} className="flex items-center gap-1 bg-[#2b1d14] text-white text-sm px-3 py-1.5 rounded-lg">
+              <button onClick={() => setShowAddStock(true)} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
                 <Plus size={14} /> เพิ่มรายการ
               </button>
             </div>
@@ -571,7 +599,7 @@ export default function CoffeeShopSystem() {
                       <td className="px-4 py-2 text-right text-[#8a7a68]">{s.unit}</td>
                       <td className="px-4 py-2 text-right text-[#8a7a68]">{s.low.toLocaleString()}</td>
                       <td className="px-4 py-2 text-right">
-                        <button onClick={() => setEditStock(s)} className="text-[#a6622f] hover:underline mr-3 text-xs">แก้ไข</button>
+                        <button onClick={() => setEditStock(s)} className="hover:underline mr-3 text-xs" style={{ color: "#a6622f" }}>แก้ไข</button>
                         <button onClick={() => deleteStockItem(s.id)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
                       </td>
                     </tr>
@@ -586,7 +614,7 @@ export default function CoffeeShopSystem() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-bold text-lg">หมวดหมู่เมนู</h2>
-              <button onClick={() => setShowAddCategory(true)} className="flex items-center gap-1 bg-[#2b1d14] text-white text-sm px-3 py-1.5 rounded-lg">
+              <button onClick={() => setShowAddCategory(true)} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
                 <Plus size={14} /> เพิ่มหมวดหมู่
               </button>
             </div>
@@ -598,12 +626,8 @@ export default function CoffeeShopSystem() {
                     <div className="text-xs text-[#8a7a68]">{menu.filter((m) => m.categoryId === cat.id).length} เมนู</div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => setEditCategory(cat)} className="text-[#a6622f] hover:text-[#7a4520]">
-                      <Edit2 size={15} />
-                    </button>
-                    <button onClick={() => deleteCategory(cat.id)} className="text-red-400 hover:text-red-600">
-                      <Trash2 size={15} />
-                    </button>
+                    <button onClick={() => setEditCategory(cat)} style={{ color: "#a6622f" }}><Edit2 size={15} /></button>
+                    <button onClick={() => deleteCategory(cat.id)} className="text-red-400 hover:text-red-600"><Trash2 size={15} /></button>
                   </div>
                 </div>
               ))}
@@ -611,37 +635,33 @@ export default function CoffeeShopSystem() {
 
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-bold text-lg">เมนูทั้งหมด</h2>
-              <button onClick={() => setShowAddMenu(true)} className="flex items-center gap-1 bg-[#2b1d14] text-white text-sm px-3 py-1.5 rounded-lg">
+              <button onClick={() => setShowAddMenu(true)} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
                 <Plus size={14} /> เพิ่มเมนู
               </button>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               {menu.map((item) => {
                 const cat = categories.find((c) => c.id === item.categoryId);
+                const groups = resolvedAddonGroupsForItem(item);
                 return (
                   <div key={item.id} className="bg-white rounded-xl border border-[#e3d2bd] p-3 flex items-start justify-between gap-3">
                     {item.image ? (
                       <img src={item.image} alt={item.name} className="w-14 h-14 object-cover rounded-lg flex-shrink-0" onError={(e) => (e.target.style.display = "none")} />
                     ) : (
                       <div className="w-14 h-14 rounded-lg bg-[#f5f1ea] flex items-center justify-center flex-shrink-0">
-                        <Coffee size={20} className="text-[#d4a574]" />
+                        <Coffee size={20} style={{ color: accent }} />
                       </div>
                     )}
                     <div className="flex-1">
                       <div className="font-semibold">{item.name}</div>
                       <div className="text-xs text-[#8a7a68]">{cat?.name || "ไม่มีหมวดหมู่"}</div>
-                      <div className="font-bold text-[#a6622f] mt-1">{THB(item.price)}</div>
-                      {item.addonGroups?.length > 0 && (
-                        <div className="text-[11px] text-[#8a7a68] mt-0.5">ตัวเลือกเสริม: {item.addonGroups.map((g) => g.name).join(", ")}</div>
-                      )}
+                      <div className="font-bold mt-1" style={{ color: "#a6622f" }}>{THB(item.price)}</div>
+                      <div className="text-[11px] text-[#8a7a68] mt-0.5">สูตร: {(item.recipe || []).length} วัตถุดิบ</div>
+                      {groups.length > 0 && <div className="text-[11px] text-[#8a7a68] mt-0.5">ตัวเลือกเสริม: {groups.map((g) => g.name).join(", ")}</div>}
                     </div>
                     <div className="flex gap-2">
-                      <button onClick={() => setEditItem(item)} className="text-[#a6622f] hover:text-[#7a4520]">
-                        <Edit2 size={15} />
-                      </button>
-                      <button onClick={() => deleteMenuItem(item.id)} className="text-red-400 hover:text-red-600">
-                        <Trash2 size={15} />
-                      </button>
+                      <button onClick={() => setEditItem(item)} style={{ color: "#a6622f" }}><Edit2 size={15} /></button>
+                      <button onClick={() => deleteMenuItem(item.id)} className="text-red-400 hover:text-red-600"><Trash2 size={15} /></button>
                     </div>
                   </div>
                 );
@@ -656,12 +676,12 @@ export default function CoffeeShopSystem() {
             <div className="grid sm:grid-cols-2 gap-4 mb-5">
               <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
                 <div className="text-sm text-[#8a7a68]">ยอดขายวันนี้</div>
-                <div className="text-2xl font-bold text-[#a6622f] mt-1">{THB(todayRevenue)}</div>
+                <div className="text-2xl font-bold mt-1" style={{ color: "#a6622f" }}>{THB(todayRevenue)}</div>
                 <div className="text-xs text-[#8a7a68] mt-1">{todaySales.length} ออเดอร์</div>
               </div>
               <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
                 <div className="text-sm text-[#8a7a68]">ยอดขายรวมทั้งหมด</div>
-                <div className="text-2xl font-bold text-[#a6622f] mt-1">{THB((sales || []).reduce((s, o) => s + o.total, 0))}</div>
+                <div className="text-2xl font-bold mt-1" style={{ color: "#a6622f" }}>{THB((sales || []).reduce((s, o) => s + o.total, 0))}</div>
                 <div className="text-xs text-[#8a7a68] mt-1">{(sales || []).length} ออเดอร์</div>
               </div>
             </div>
@@ -683,19 +703,13 @@ export default function CoffeeShopSystem() {
                   <tbody>
                     {sales.slice(0, 50).map((o) => (
                       <tr key={o.id} className="border-t border-[#f0e6da]">
-                        <td className="px-4 py-2 text-[#8a7a68] whitespace-nowrap">
-                          {new Date(o.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
-                        </td>
-                        <td className="px-4 py-2 text-[#8a7a68]">{CHANNELS.find((c) => c.id === (o.channel || "walkin"))?.name}</td>
+                        <td className="px-4 py-2 text-[#8a7a68] whitespace-nowrap">{new Date(o.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}</td>
+                        <td className="px-4 py-2 text-[#8a7a68]">{channels.find((c) => c.id === (o.channel || "walkin"))?.name || o.channel}</td>
                         <td className="px-4 py-2">{o.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</td>
                         <td className="px-4 py-2 text-right font-semibold">{THB(o.total)}</td>
                         <td className="px-4 py-2 text-right whitespace-nowrap">
-                          <button onClick={() => setReceiptOrder(o)} className="text-[#a6622f] hover:text-[#7a4520] mr-2" title="พิมพ์ใบเสร็จ">
-                            <Printer size={15} />
-                          </button>
-                          <button onClick={() => setConfirmDeleteOrder(o)} className="text-red-400 hover:text-red-600" title="ลบรายการ">
-                            <Trash2 size={15} />
-                          </button>
+                          <button onClick={() => setReceiptOrder(o)} className="mr-2" style={{ color: "#a6622f" }} title="พิมพ์ใบเสร็จ"><Printer size={15} /></button>
+                          <button onClick={() => setConfirmDeleteOrder(o)} className="text-red-400 hover:text-red-600" title="ลบรายการ"><Trash2 size={15} /></button>
                         </td>
                       </tr>
                     ))}
@@ -707,36 +721,72 @@ export default function CoffeeShopSystem() {
         )}
 
         {tab === "settings" && (
-          <div>
-            <h2 className="font-bold text-lg mb-3">ตั้งค่า % GP ของแต่ละช่องทาง Delivery</h2>
-            <p className="text-sm text-[#8a7a68] mb-4">
-              ระบบจะคำนวณราคาที่ควรตั้งในแอพ delivery ให้อัตโนมัติ เพื่อให้ได้กำไรเท่ากับขายหน้าร้าน หลังหัก GP — ยังแก้ราคาเองรายเมนูได้ในหน้าจัดการเมนู
-            </p>
-            <div className="bg-white rounded-xl border border-[#e3d2bd] divide-y divide-[#f0e6da]">
-              {CHANNELS.filter((c) => c.id !== "walkin").map((ch) => (
-                <div key={ch.id} className="flex items-center justify-between p-4">
-                  <div className="flex items-center gap-2 font-medium">
-                    <Bike size={16} className="text-[#a6622f]" /> {ch.name}
+          <div className="space-y-8">
+            {/* Branding */}
+            <div>
+              <h2 className="font-bold text-lg mb-3">โลโก้และสีธีมร้าน</h2>
+              <div className="bg-white rounded-xl border border-[#e3d2bd] p-4 space-y-4">
+                <BrandingEditor settings={settings} onSave={updateSettings} />
+              </div>
+            </div>
+
+            {/* Channels */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-bold text-lg">ช่องทางขาย / Delivery</h2>
+                <button onClick={() => setShowAddChannel(true)} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
+                  <Plus size={14} /> เพิ่มช่องทาง
+                </button>
+              </div>
+              <div className="bg-white rounded-xl border border-[#e3d2bd] divide-y divide-[#f0e6da]">
+                {channels.map((ch) => (
+                  <div key={ch.id} className="flex items-center justify-between p-4">
+                    <div className="flex items-center gap-2 font-medium">
+                      {ch.id === "walkin" ? <Store size={16} style={{ color: "#a6622f" }} /> : <Bike size={16} style={{ color: "#a6622f" }} />}
+                      {ch.name} {ch.builtin && <span className="text-[10px] text-[#cbb9a8] font-normal">(พื้นฐาน)</span>}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-[#8a7a68]">{ch.gp || 0}% GP</span>
+                      <button onClick={() => setEditChannel(ch)} style={{ color: "#a6622f" }}><Edit2 size={15} /></button>
+                      {!ch.builtin && <button onClick={() => deleteChannel(ch.id)} className="text-red-400 hover:text-red-600"><Trash2 size={15} /></button>}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={settings.gp[ch.id] ?? 0}
-                      onChange={(e) => saveGp(ch.id, e.target.value)}
-                      className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-right"
-                    />
-                    <span className="text-sm text-[#8a7a68]">% GP</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Addon groups library */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-bold text-lg">คลังตัวเลือกเสริม</h2>
+                <button onClick={() => setShowAddAddonGroup(true)} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
+                  <Plus size={14} /> เพิ่มกลุ่มตัวเลือก
+                </button>
+              </div>
+              <p className="text-xs text-[#8a7a68] mb-3">ใส่ตัวเลือกเสริมที่นี่ครั้งเดียว แล้วไปผูกกับเมนูที่ต้องการได้ในหน้าแก้ไขเมนู</p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {addonGroupsLib.map((g) => (
+                  <div key={g.id} className="bg-white rounded-xl border border-[#e3d2bd] p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-sm">{g.name}</div>
+                      <div className="flex gap-2">
+                        <button onClick={() => setEditAddonGroup(g)} style={{ color: "#a6622f" }}><Edit2 size={14} /></button>
+                        <button onClick={() => deleteAddonGroup(g.id)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                    <div className="text-xs text-[#8a7a68] mt-1">{g.options.map((o) => o.name).join(", ")}</div>
                   </div>
-                </div>
-              ))}
+                ))}
+                {addonGroupsLib.length === 0 && <p className="text-xs text-[#cbb9a8]">ยังไม่มีตัวเลือกเสริม</p>}
+              </div>
             </div>
           </div>
         )}
       </main>
 
       {toast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 bg-[#2b1d14] text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 shadow-lg z-50">
-          <Check size={14} className="text-[#d4a574]" /> {toast}
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 shadow-lg z-50" style={{ backgroundColor: primary }}>
+          <Check size={14} style={{ color: accent }} /> {toast}
         </div>
       )}
 
@@ -744,8 +794,11 @@ export default function CoffeeShopSystem() {
         <MenuModal
           item={editItem}
           categories={categories}
+          stock={stock}
+          addonGroupsLib={addonGroupsLib}
           onClose={() => { setEditItem(null); setShowAddMenu(false); }}
           onSave={saveMenuItem}
+          channels={channels}
         />
       )}
       {(editStock || showAddStock) && (
@@ -754,9 +807,16 @@ export default function CoffeeShopSystem() {
       {(editCategory || showAddCategory) && (
         <CategoryModal item={editCategory} onClose={() => { setEditCategory(null); setShowAddCategory(false); }} onSave={saveCategory} />
       )}
+      {(editChannel || showAddChannel) && (
+        <ChannelModal item={editChannel} onClose={() => { setEditChannel(null); setShowAddChannel(false); }} onSave={saveChannel} />
+      )}
+      {(editAddonGroup || showAddAddonGroup) && (
+        <AddonGroupModal item={editAddonGroup} onClose={() => { setEditAddonGroup(null); setShowAddAddonGroup(false); }} onSave={saveAddonGroup} />
+      )}
       {addonItem && (
         <AddonModal
           item={addonItem}
+          groups={resolvedAddonGroupsForItem(addonItem)}
           basePrice={priceForChannel(addonItem, channel)}
           onClose={() => setAddonItem(null)}
           onConfirm={(chosenAddons) => {
@@ -765,7 +825,7 @@ export default function CoffeeShopSystem() {
           }}
         />
       )}
-      {receiptOrder && <ReceiptModal order={receiptOrder} onClose={() => setReceiptOrder(null)} />}
+      {receiptOrder && <ReceiptModal order={receiptOrder} channels={channels} settings={settings} onClose={() => setReceiptOrder(null)} />}
       {confirmDeleteOrder && (
         <ConfirmModal
           title="ลบรายการขายนี้?"
@@ -774,12 +834,25 @@ export default function CoffeeShopSystem() {
           onConfirm={() => deleteOrder(confirmDeleteOrder.id)}
         />
       )}
+      {lowStockConfirmItem && (
+        <ConfirmModal
+          title="วัตถุดิบไม่พอ / ใกล้หมด"
+          message={`เมนู "${lowStockConfirmItem.name}" ขาด: ${stockStatus(lowStockConfirmItem).missing.join(", ")} — ยังต้องการขายต่อไหม? (ระบบจะตัดสต๊อกเท่าที่มี ไม่ติดลบ)`}
+          confirmLabel="ขายต่อ"
+          onCancel={() => setLowStockConfirmItem(null)}
+          onConfirm={() => {
+            const it = lowStockConfirmItem;
+            setLowStockConfirmItem(null);
+            proceedAddItem(it);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-// ---------- Modal: ยืนยันการลบ ----------
-function ConfirmModal({ title, message, onCancel, onConfirm }) {
+// ---------- Modal: ยืนยัน ----------
+function ConfirmModal({ title, message, onCancel, onConfirm, confirmLabel = "ลบ" }) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl p-5 w-full max-w-sm">
@@ -787,10 +860,76 @@ function ConfirmModal({ title, message, onCancel, onConfirm }) {
         <p className="text-sm text-[#8a7a68] mb-4">{message}</p>
         <div className="flex gap-2">
           <button onClick={onCancel} className="flex-1 border border-[#e3d2bd] rounded-lg py-2 text-sm font-medium">ยกเลิก</button>
-          <button onClick={onConfirm} className="flex-1 bg-red-500 text-white rounded-lg py-2 text-sm font-semibold">ลบ</button>
+          <button onClick={onConfirm} className="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-semibold">{confirmLabel}</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------- Branding editor ----------
+function BrandingEditor({ settings, onSave }) {
+  const [logoUrl, setLogoUrl] = useState(settings.logoUrl || "");
+  const [primaryColor, setPrimaryColor] = useState(settings.primaryColor || "#2b1d14");
+  const [accentColor, setAccentColor] = useState(settings.accentColor || "#d4a574");
+  const [uploading, setUploading] = useState(false);
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadImage(file, "menu-images");
+      setLogoUrl(url);
+    } catch (err) {
+      console.error(err);
+      alert("อัปโหลดโลโก้ไม่สำเร็จ");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <>
+      <div>
+        <label className="text-xs text-[#8a7a68]">โลโก้ร้าน</label>
+        <div className="flex items-center gap-3 mt-1">
+          {logoUrl ? (
+            <img src={logoUrl} alt="logo" className="w-16 h-16 object-cover rounded-full border border-[#e3d2bd]" onError={(e) => (e.target.style.display = "none")} />
+          ) : (
+            <div className="w-16 h-16 rounded-full border border-dashed border-[#e3d2bd] flex items-center justify-center text-[#cbb9a8]"><ImageIcon size={20} /></div>
+          )}
+          <label className="flex-1 text-center border border-[#e3d2bd] rounded-lg py-2 text-xs font-medium cursor-pointer hover:bg-[#f5f1ea]">
+            {uploading ? "กำลังอัปโหลด..." : "อัปโหลดโลโก้"}
+            <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" disabled={uploading} />
+          </label>
+        </div>
+        <p className="text-[11px] text-[#cbb9a8] mt-1">โลโก้นี้จะแสดงที่หัวแอพและบนใบเสร็จ</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs text-[#8a7a68]">สีหลัก (หัวแอพ/ปุ่ม)</label>
+          <div className="flex items-center gap-2 mt-1">
+            <input type="color" value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)} className="w-10 h-10 rounded border border-[#e3d2bd]" />
+            <input value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)} className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-2 text-sm" />
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-[#8a7a68]">สีรอง (ไฮไลต์)</label>
+          <div className="flex items-center gap-2 mt-1">
+            <input type="color" value={accentColor} onChange={(e) => setAccentColor(e.target.value)} className="w-10 h-10 rounded border border-[#e3d2bd]" />
+            <input value={accentColor} onChange={(e) => setAccentColor(e.target.value)} className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-2 text-sm" />
+          </div>
+        </div>
+      </div>
+      <button
+        onClick={() => onSave({ logoUrl, primaryColor, accentColor })}
+        className="w-full text-white rounded-lg py-2.5 font-semibold text-sm"
+        style={{ backgroundColor: primaryColor }}
+      >
+        บันทึก
+      </button>
+    </>
   );
 }
 
@@ -805,14 +944,81 @@ function CategoryModal({ item, onClose, onSave }) {
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <label className="text-xs text-[#8a7a68]">ชื่อหมวดหมู่</label>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="เช่น เมนูเย็น, ของหวาน"
-          className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm"
-        />
+        <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+        <button onClick={() => name && onSave({ ...item, name })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Modal: ช่องทางขาย ----------
+function ChannelModal({ item, onClose, onSave }) {
+  const [name, setName] = useState(item?.name || "");
+  const [gp, setGp] = useState(item?.gp ?? 0);
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-5 w-full max-w-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">{item ? "แก้ไขช่องทาง" : "เพิ่มช่องทางใหม่"}</h3>
+          <button onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-[#8a7a68]">ชื่อช่องทาง (เช่น Foodpanda, Robinhood)</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-[#8a7a68]">% GP ที่แพลตฟอร์มหัก</label>
+            <input type="number" value={gp} onChange={(e) => setGp(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+        </div>
+        <button onClick={() => name && onSave({ ...item, name, gp: Number(gp) || 0 })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Modal: กลุ่มตัวเลือกเสริม (คลังกลาง) ----------
+function AddonGroupModal({ item, onClose, onSave }) {
+  const [name, setName] = useState(item?.name || "");
+  const [multi, setMulti] = useState(item?.multi || false);
+  const [options, setOptions] = useState(item?.options || []);
+
+  const addOption = () => setOptions((o) => [...o, { id: uid(), name: "", price: 0 }]);
+  const updateOption = (id, patch) => setOptions((o) => o.map((opt) => (opt.id === id ? { ...opt, ...patch } : opt)));
+  const removeOption = (id) => setOptions((o) => o.filter((opt) => opt.id !== id));
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">{item ? "แก้ไขกลุ่มตัวเลือกเสริม" : "เพิ่มกลุ่มตัวเลือกเสริม"}</h3>
+          <button onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-[#8a7a68]">ชื่อกลุ่ม เช่น เลือกเมล็ดกาแฟ, นมทางเลือก, เกรดมัทฉะ</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-[#5a4a3a]">
+            <input type="checkbox" checked={multi} onChange={(e) => setMulti(e.target.checked)} /> เลือกได้หลายอันในกลุ่มนี้
+          </label>
+          <div>
+            <div className="text-xs text-[#8a7a68] mb-1.5">ตัวเลือกในกลุ่มนี้</div>
+            <div className="space-y-1.5">
+              {options.map((opt) => (
+                <div key={opt.id} className="flex items-center gap-2">
+                  <input value={opt.name} onChange={(e) => updateOption(opt.id, { name: e.target.value })} placeholder="ชื่อตัวเลือก" className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm" />
+                  <input type="number" value={opt.price} onChange={(e) => updateOption(opt.id, { price: Number(e.target.value) || 0 })} placeholder="+ราคา" className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-right" />
+                  <button onClick={() => removeOption(opt.id)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                </div>
+              ))}
+              <button onClick={addOption} className="text-xs font-medium flex items-center gap-1 mt-1" style={{ color: "#a6622f" }}><Plus size={12} /> เพิ่มตัวเลือก</button>
+            </div>
+          </div>
+        </div>
         <button
-          onClick={() => name && onSave({ ...item, name })}
+          onClick={() => name && options.length > 0 && onSave({ ...item, name, multi, options })}
           className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
         >
           บันทึก
@@ -823,22 +1029,19 @@ function CategoryModal({ item, onClose, onSave }) {
 }
 
 // ---------- Modal: ตัวเลือกเสริมก่อนใส่ตะกร้า ----------
-function AddonModal({ item, basePrice, onClose, onConfirm }) {
-  const [selected, setSelected] = useState({}); // groupId -> optionId or [optionIds]
+function AddonModal({ item, groups, basePrice, onClose, onConfirm }) {
+  const [selected, setSelected] = useState({});
 
-  const toggleSingle = (groupId, optionId) => {
-    setSelected((s) => ({ ...s, [groupId]: optionId }));
-  };
-  const toggleMulti = (groupId, optionId) => {
+  const toggleSingle = (groupId, optionId) => setSelected((s) => ({ ...s, [groupId]: optionId }));
+  const toggleMulti = (groupId, optionId) =>
     setSelected((s) => {
       const cur = s[groupId] || [];
       const next = cur.includes(optionId) ? cur.filter((x) => x !== optionId) : [...cur, optionId];
       return { ...s, [groupId]: next };
     });
-  };
 
   const chosenAddons = [];
-  (item.addonGroups || []).forEach((g) => {
+  groups.forEach((g) => {
     const sel = selected[g.id];
     if (g.multi) {
       (sel || []).forEach((optId) => {
@@ -860,7 +1063,7 @@ function AddonModal({ item, basePrice, onClose, onConfirm }) {
           <button onClick={onClose}><X size={18} /></button>
         </div>
         <div className="space-y-4">
-          {(item.addonGroups || []).map((g) => (
+          {groups.map((g) => (
             <div key={g.id}>
               <div className="text-sm font-semibold mb-1.5">{g.name}</div>
               <div className="space-y-1.5">
@@ -870,12 +1073,10 @@ function AddonModal({ item, basePrice, onClose, onConfirm }) {
                     <button
                       key={opt.id}
                       onClick={() => (g.multi ? toggleMulti(g.id, opt.id) : toggleSingle(g.id, opt.id))}
-                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${
-                        isSelected ? "border-[#d4a574] bg-[#fdf2e9]" : "border-[#e3d2bd]"
-                      }`}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm ${isSelected ? "border-[#d4a574] bg-[#fdf2e9]" : "border-[#e3d2bd]"}`}
                     >
                       <span>{opt.name}</span>
-                      <span className="text-[#a6622f]">{opt.price > 0 ? `+${THB(opt.price)}` : "ไม่มีค่าใช้จ่าย"}</span>
+                      <span style={{ color: "#a6622f" }}>{opt.price > 0 ? `+${THB(opt.price)}` : "ไม่มีค่าใช้จ่าย"}</span>
                     </button>
                   );
                 })}
@@ -885,21 +1086,16 @@ function AddonModal({ item, basePrice, onClose, onConfirm }) {
         </div>
         <div className="border-t border-[#e3d2bd] mt-4 pt-3 flex items-center justify-between font-bold">
           <span>รวม</span>
-          <span className="text-[#a6622f]">{THB(total)}</span>
+          <span style={{ color: "#a6622f" }}>{THB(total)}</span>
         </div>
-        <button
-          onClick={() => onConfirm(chosenAddons)}
-          className="mt-3 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
-        >
-          ใส่ตะกร้า
-        </button>
+        <button onClick={() => onConfirm(chosenAddons)} className="mt-3 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">ใส่ตะกร้า</button>
       </div>
     </div>
   );
 }
 
-// ---------- Modal: เมนู (พร้อมหมวดหมู่, ราคาแยกช่องทาง, ตัวเลือกเสริม) ----------
-function MenuModal({ item, categories, onClose, onSave }) {
+// ---------- Modal: เมนู ----------
+function MenuModal({ item, categories, stock, addonGroupsLib, channels, onClose, onSave }) {
   const [name, setName] = useState(item?.name || "");
   const [price, setPrice] = useState(item?.price ?? "");
   const [categoryId, setCategoryId] = useState(item?.categoryId || categories[0]?.id || "");
@@ -907,7 +1103,8 @@ function MenuModal({ item, categories, onClose, onSave }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [channelPrices, setChannelPrices] = useState(item?.channelPrices || {});
-  const [addonGroups, setAddonGroups] = useState(item?.addonGroups || []);
+  const [addonGroupIds, setAddonGroupIds] = useState(item?.addonGroupIds || []);
+  const [recipe, setRecipe] = useState(item?.recipe || []);
 
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
@@ -915,7 +1112,7 @@ function MenuModal({ item, categories, onClose, onSave }) {
     setUploading(true);
     setUploadError("");
     try {
-      const url = await uploadMenuImage(file);
+      const url = await uploadImage(file, "menu-images");
       setImage(url);
     } catch (err) {
       console.error(err);
@@ -925,20 +1122,14 @@ function MenuModal({ item, categories, onClose, onSave }) {
     }
   };
 
-  // ---- Addon group editing ----
-  const addGroup = () => setAddonGroups((g) => [...g, { id: uid(), name: "", multi: false, options: [] }]);
-  const updateGroup = (id, patch) => setAddonGroups((g) => g.map((grp) => (grp.id === id ? { ...grp, ...patch } : grp)));
-  const removeGroup = (id) => setAddonGroups((g) => g.filter((grp) => grp.id !== id));
-  const addOption = (groupId) =>
-    setAddonGroups((g) => g.map((grp) => (grp.id === groupId ? { ...grp, options: [...grp.options, { id: uid(), name: "", price: 0 }] } : grp)));
-  const updateOption = (groupId, optId, patch) =>
-    setAddonGroups((g) =>
-      g.map((grp) =>
-        grp.id === groupId ? { ...grp, options: grp.options.map((o) => (o.id === optId ? { ...o, ...patch } : o)) } : grp
-      )
-    );
-  const removeOption = (groupId, optId) =>
-    setAddonGroups((g) => g.map((grp) => (grp.id === groupId ? { ...grp, options: grp.options.filter((o) => o.id !== optId) } : grp)));
+  // ---- Recipe editing ----
+  const addRecipeRow = () => setRecipe((r) => [...r, { ing: stock[0]?.id || "", qty: 0 }]);
+  const updateRecipeRow = (idx, patch) => setRecipe((r) => r.map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+  const removeRecipeRow = (idx) => setRecipe((r) => r.filter((_, i) => i !== idx));
+
+  // ---- Addon group linking ----
+  const toggleAddonGroup = (gid) =>
+    setAddonGroupIds((ids) => (ids.includes(gid) ? ids.filter((x) => x !== gid) : [...ids, gid]));
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -959,9 +1150,7 @@ function MenuModal({ item, categories, onClose, onSave }) {
           <div>
             <label className="text-xs text-[#8a7a68]">หมวดหมู่</label>
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm bg-white">
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
+              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
 
@@ -971,9 +1160,7 @@ function MenuModal({ item, categories, onClose, onSave }) {
               {image ? (
                 <img src={image} alt="preview" className="w-16 h-16 object-cover rounded-lg border border-[#e3d2bd]" onError={(e) => (e.target.style.display = "none")} />
               ) : (
-                <div className="w-16 h-16 rounded-lg border border-dashed border-[#e3d2bd] flex items-center justify-center text-[#cbb9a8]">
-                  <Coffee size={20} />
-                </div>
+                <div className="w-16 h-16 rounded-lg border border-dashed border-[#e3d2bd] flex items-center justify-center text-[#cbb9a8]"><Coffee size={20} /></div>
               )}
               <label className="flex-1 text-center border border-[#e3d2bd] rounded-lg py-2 text-xs font-medium cursor-pointer hover:bg-[#f5f1ea]">
                 {uploading ? "กำลังอัปโหลด..." : "อัปโหลดรูป"}
@@ -981,21 +1168,40 @@ function MenuModal({ item, categories, onClose, onSave }) {
               </label>
             </div>
             {uploadError && <div className="text-xs text-red-600 mt-1">{uploadError}</div>}
-            <input
-              value={image}
-              onChange={(e) => setImage(e.target.value)}
-              placeholder="หรือวางลิงก์รูปภาพ (URL)"
-              className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-2 text-xs"
-            />
+            <input value={image} onChange={(e) => setImage(e.target.value)} placeholder="หรือวางลิงก์รูปภาพ (URL)" className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-2 text-xs" />
+          </div>
+
+          {/* Recipe editor */}
+          <div className="border border-[#e3d2bd] rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold text-[#8a7a68]">สูตร / ส่วนผสมที่ใช้ตัดสต๊อก</div>
+              <button onClick={addRecipeRow} className="text-xs font-medium flex items-center gap-1" style={{ color: "#a6622f" }}><Plus size={12} /> เพิ่มวัตถุดิบ</button>
+            </div>
+            <div className="space-y-1.5">
+              {recipe.map((row, idx) => {
+                const stockItem = stock.find((s) => s.id === row.ing);
+                return (
+                  <div key={idx} className="flex items-center gap-2">
+                    <select value={row.ing} onChange={(e) => updateRecipeRow(idx, { ing: e.target.value })} className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs bg-white">
+                      {stock.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    <input type="number" value={row.qty} onChange={(e) => updateRecipeRow(idx, { qty: Number(e.target.value) || 0 })} className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs text-right" />
+                    <span className="text-xs text-[#8a7a68] w-10">{stockItem?.unit || ""}</span>
+                    <button onClick={() => removeRecipeRow(idx)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                  </div>
+                );
+              })}
+              {recipe.length === 0 && <p className="text-xs text-[#cbb9a8]">ยังไม่มีสูตร (เมนูนี้จะไม่ตัดสต๊อก)</p>}
+            </div>
           </div>
 
           {/* Channel prices */}
           <div className="border border-[#e3d2bd] rounded-lg p-3">
             <div className="text-xs font-semibold text-[#8a7a68] mb-2">ราคาในแอพ Delivery (เว้นว่าง = คำนวณอัตโนมัติจาก % GP)</div>
             <div className="space-y-2">
-              {CHANNELS.filter((c) => c.id !== "walkin").map((ch) => (
+              {channels.filter((c) => c.id !== "walkin").map((ch) => (
                 <div key={ch.id} className="flex items-center justify-between gap-2">
-                  <span className="text-sm text-[#5a4a3a] w-24">{ch.name}</span>
+                  <span className="text-sm text-[#5a4a3a] w-24 truncate">{ch.name}</span>
                   <input
                     type="number"
                     placeholder={price ? String(suggestedChannelPrice(Number(price), ch.gp)) : "—"}
@@ -1008,77 +1214,24 @@ function MenuModal({ item, categories, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Addon groups */}
+          {/* Addon group linking */}
           <div className="border border-[#e3d2bd] rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-semibold text-[#8a7a68]">ตัวเลือกเสริม (เช่น เมล็ดกาแฟ, นมทางเลือก, เกรดมัทฉะ)</div>
-              <button onClick={addGroup} className="text-xs text-[#a6622f] font-medium flex items-center gap-1">
-                <Plus size={12} /> เพิ่มกลุ่ม
-              </button>
-            </div>
-            <div className="space-y-3">
-              {addonGroups.map((g) => (
-                <div key={g.id} className="border border-[#f0e6da] rounded-lg p-2.5 bg-[#fdfaf6]">
-                  <div className="flex items-center gap-2 mb-2">
-                    <input
-                      value={g.name}
-                      onChange={(e) => updateGroup(g.id, { name: e.target.value })}
-                      placeholder="ชื่อกลุ่ม เช่น เลือกเมล็ดกาแฟ"
-                      className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm"
-                    />
-                    <label className="flex items-center gap-1 text-xs text-[#8a7a68] whitespace-nowrap">
-                      <input type="checkbox" checked={g.multi} onChange={(e) => updateGroup(g.id, { multi: e.target.checked })} />
-                      เลือกได้หลายอัน
-                    </label>
-                    <button onClick={() => removeGroup(g.id)} className="text-red-400 hover:text-red-600">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                  <div className="space-y-1.5 pl-2">
-                    {g.options.map((opt) => (
-                      <div key={opt.id} className="flex items-center gap-2">
-                        <input
-                          value={opt.name}
-                          onChange={(e) => updateOption(g.id, opt.id, { name: e.target.value })}
-                          placeholder="ชื่อตัวเลือก"
-                          className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1 text-xs"
-                        />
-                        <input
-                          type="number"
-                          value={opt.price}
-                          onChange={(e) => updateOption(g.id, opt.id, { price: Number(e.target.value) || 0 })}
-                          placeholder="+ราคา"
-                          className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1 text-xs text-right"
-                        />
-                        <button onClick={() => removeOption(g.id, opt.id)} className="text-red-400 hover:text-red-600">
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={() => addOption(g.id)} className="text-xs text-[#a6622f] font-medium flex items-center gap-1 mt-1">
-                      <Plus size={11} /> เพิ่มตัวเลือก
-                    </button>
-                  </div>
-                </div>
+            <div className="text-xs font-semibold text-[#8a7a68] mb-2">ผูกตัวเลือกเสริม (จัดการคลังได้ในแท็บ "ตั้งค่า")</div>
+            <div className="space-y-1.5">
+              {addonGroupsLib.map((g) => (
+                <label key={g.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={addonGroupIds.includes(g.id)} onChange={() => toggleAddonGroup(g.id)} />
+                  {g.name}
+                </label>
               ))}
-              {addonGroups.length === 0 && <p className="text-xs text-[#cbb9a8]">ยังไม่มีตัวเลือกเสริม</p>}
+              {addonGroupsLib.length === 0 && <p className="text-xs text-[#cbb9a8]">ยังไม่มีตัวเลือกเสริมในคลัง ไปเพิ่มที่แท็บ "ตั้งค่า" ก่อน</p>}
             </div>
           </div>
         </div>
         <button
           onClick={() =>
-            name &&
-            price !== "" &&
-            onSave({
-              ...item,
-              name,
-              price: Number(price),
-              categoryId,
-              image,
-              channelPrices,
-              addonGroups: addonGroups.filter((g) => g.name && g.options.length > 0),
-              recipe: item?.recipe || [],
-            })
+            name && price !== "" &&
+            onSave({ ...item, name, price: Number(price), categoryId, image, channelPrices, addonGroupIds, recipe })
           }
           className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
         >
@@ -1122,21 +1275,16 @@ function StockModal({ item, onClose, onSave }) {
             <input type="number" value={low} onChange={(e) => setLow(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
           </div>
         </div>
-        <button
-          onClick={() => name && qty !== "" && onSave({ ...item, name, qty: Number(qty), unit, low: Number(low || 0) })}
-          className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
-        >
-          บันทึก
-        </button>
+        <button onClick={() => name && qty !== "" && onSave({ ...item, name, qty: Number(qty), unit, low: Number(low || 0) })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
       </div>
     </div>
   );
 }
 
 // ---------- ใบเสร็จ ----------
-function ReceiptModal({ order, onClose }) {
+function ReceiptModal({ order, channels, settings, onClose }) {
   const handlePrint = () => window.print();
-  const chName = CHANNELS.find((c) => c.id === (order.channel || "walkin"))?.name;
+  const chName = channels.find((c) => c.id === (order.channel || "walkin"))?.name;
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4 print:bg-white print:p-0">
@@ -1153,12 +1301,12 @@ function ReceiptModal({ order, onClose }) {
       <div className="bg-white rounded-xl w-full max-w-xs print:rounded-none print:max-w-full print:shadow-none">
         <div id="receipt-print-area" className="p-5 font-mono text-sm">
           <div className="text-center mb-3">
+            {settings.logoUrl && <img src={settings.logoUrl} alt="logo" className="w-10 h-10 object-cover rounded-full mx-auto mb-2" />}
             <div className="font-bold text-base">{SHOP_NAME}</div>
             <div className="text-xs text-[#8a7a68]">ใบเสร็จรับเงิน · {chName}</div>
           </div>
           <div className="text-xs text-[#8a7a68] mb-2">
-            เลขที่: {order.id}
-            <br />
+            เลขที่: {order.id}<br />
             วันที่: {new Date(order.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
           </div>
           <div className="border-t border-dashed border-[#999] my-2" />
@@ -1166,17 +1314,14 @@ function ReceiptModal({ order, onClose }) {
             <div key={idx} className="mb-1">
               <div className="flex justify-between">
                 <span>{it.name} x{it.qty}</span>
-                <span>{THB((it.lineTotal != null ? it.lineTotal : it.price * it.qty))}</span>
+                <span>{THB(it.lineTotal != null ? it.lineTotal : it.price * it.qty)}</span>
               </div>
-              {it.addons?.length > 0 && (
-                <div className="text-[10px] text-[#8a7a68] pl-2">{it.addons.map((a) => a.name).join(", ")}</div>
-              )}
+              {it.addons?.length > 0 && <div className="text-[10px] text-[#8a7a68] pl-2">{it.addons.map((a) => a.name).join(", ")}</div>}
             </div>
           ))}
           <div className="border-t border-dashed border-[#999] my-2" />
           <div className="flex justify-between font-bold text-base">
-            <span>รวม</span>
-            <span>{THB(order.total)}</span>
+            <span>รวม</span><span>{THB(order.total)}</span>
           </div>
           <div className="text-center text-xs text-[#8a7a68] mt-4">ขอบคุณที่ใช้บริการ</div>
         </div>
