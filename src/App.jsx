@@ -46,9 +46,9 @@ const DEFAULT_MENU = [
 // ช่องทางขายเริ่มต้น — "walkin" เป็นช่องทางพื้นฐานที่ลบไม่ได้
 const DEFAULT_CHANNELS = [
   { id: "walkin", name: "หน้าร้าน", gp: 0, builtin: true },
-  { id: "grab", name: "Grab", gp: 30 },
-  { id: "lineman", name: "Lineman", gp: 30 },
-  { id: "shopee", name: "Shopee Food", gp: 25 },
+  { id: "grab", name: "Grab", gp: 30, orderPrefix: "GR" },
+  { id: "lineman", name: "Lineman", gp: 30, orderPrefix: "LM" },
+  { id: "shopee", name: "Shopee Food", gp: 25, orderPrefix: "SP" },
 ];
 
 // คลังตัวเลือกเสริม ใส่ครั้งเดียว ผูกกับหลายเมนูได้
@@ -65,7 +65,17 @@ const DEFAULT_SETTINGS = {
   accentColor: "#d4a574",
   channels: DEFAULT_CHANNELS,
   addonGroups: DEFAULT_ADDON_GROUPS,
+  walkinReset: "day", // day | month | year | never
+  orderCounters: {},  // { walkin: {key, count}, grab: {count}, ... }
 };
+
+function periodKeyFor(resetMode) {
+  const d = new Date();
+  if (resetMode === "day") return d.toISOString().slice(0, 10);
+  if (resetMode === "month") return d.toISOString().slice(0, 7);
+  if (resetMode === "year") return String(d.getFullYear());
+  return "all";
+}
 
 // ============================================================
 // 2) อ่าน/เขียนข้อมูลจาก Supabase
@@ -118,6 +128,7 @@ export default function CoffeeShopSystem() {
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [editAddonGroup, setEditAddonGroup] = useState(null);
   const [showAddAddonGroup, setShowAddAddonGroup] = useState(false);
+  const [channelRef, setChannelRef] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -135,7 +146,14 @@ export default function CoffeeShopSystem() {
         if (sl === null) { sl = []; await saveData("sales", sl); }
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
         // migrate: ensure new settings fields exist for older saved settings
-        st = { ...DEFAULT_SETTINGS, ...st, channels: st.channels || DEFAULT_CHANNELS, addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS };
+        st = {
+          ...DEFAULT_SETTINGS,
+          ...st,
+          channels: st.channels || DEFAULT_CHANNELS,
+          addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS,
+          walkinReset: st.walkinReset || "day",
+          orderCounters: st.orderCounters || {},
+        };
         setMenu(m);
         setCategories(c);
         setStock(s);
@@ -244,6 +262,30 @@ export default function CoffeeShopSystem() {
     }
     setChannel(chId);
     setCart([]);
+    setChannelRef("");
+  };
+
+  // ---- เลขออเดอร์: หน้าร้านเรียง 1,2,3... รีเซ็ตตามรอบ / ช่องทางอื่นใช้เลขจากแอปจริงที่พนักงานพิมพ์ ----
+  const getNextOrderNumber = (chId, manualRef) => {
+    const counters = settings.orderCounters || {};
+    if (chId === "walkin") {
+      const mode = settings.walkinReset || "day";
+      const key = periodKeyFor(mode);
+      const entry = counters.walkin && counters.walkin.key === key ? counters.walkin : { key, count: 0 };
+      const next = entry.count + 1;
+      const newCounters = { ...counters, walkin: { key, count: next } };
+      return { display: String(next), newCounters };
+    }
+    // ช่องทาง delivery: ใช้เลขที่พนักงานพิมพ์จากแอปจริงถ้ามี ไม่งั้น fallback เป็นเลขรันภายใน
+    if (manualRef && manualRef.trim()) {
+      return { display: manualRef.trim(), newCounters: counters };
+    }
+    const entry = counters[chId] || { count: 0 };
+    const next = entry.count + 1;
+    const newCounters = { ...counters, [chId]: { count: next } };
+    const ch = channels.find((c) => c.id === chId);
+    const prefix = ch?.orderPrefix || (ch?.name || "OD").slice(0, 2).toUpperCase();
+    return { display: `${prefix}-${String(next).padStart(3, "0")}`, newCounters };
   };
 
   const checkout = async () => {
@@ -255,9 +297,17 @@ export default function CoffeeShopSystem() {
         const s = newStock.find((x) => x.id === r.ing);
         if (s) s.qty = Math.max(0, s.qty - r.qty * line.qty);
       });
+      (line.addons || []).forEach((a) => {
+        if (a.stockIng && a.stockQty) {
+          const s = newStock.find((x) => x.id === a.stockIng);
+          if (s) s.qty = Math.max(0, s.qty - a.stockQty * line.qty);
+        }
+      });
     }
+    const { display: orderNumber, newCounters } = getNextOrderNumber(channel, channelRef);
     const order = {
       id: uid(),
+      orderNumber,
       channel,
       items: cart.map((x) => ({
         id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x),
@@ -266,11 +316,14 @@ export default function CoffeeShopSystem() {
       time: new Date().toISOString(),
     };
     const newSales = [order, ...sales];
+    const newSettings = { ...settings, orderCounters: newCounters };
     setStock(newStock);
     setSales(newSales);
+    setSettings(newSettings);
     setCart([]);
-    await Promise.all([saveData("stock", newStock), saveData("sales", newSales)]);
-    showToast("บันทึกการขายแล้ว");
+    setChannelRef("");
+    await Promise.all([saveData("stock", newStock), saveData("sales", newSales), saveData("settings", newSettings)]);
+    showToast(`บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber}`);
     setReceiptOrder(order);
   };
 
@@ -535,6 +588,17 @@ export default function CoffeeShopSystem() {
               <div className="text-xs text-[#8a7a68] mb-3">
                 ช่องทาง: <span className="font-semibold" style={{ color: "#a6622f" }}>{channels.find((c) => c.id === channel)?.name}</span>
               </div>
+              {channel !== "walkin" && (
+                <div className="mb-3">
+                  <label className="text-xs text-[#8a7a68]">เลขที่ออเดอร์จากแอป (เช่น GF-001)</label>
+                  <input
+                    value={channelRef}
+                    onChange={(e) => setChannelRef(e.target.value)}
+                    placeholder="พิมพ์เลขที่ที่เห็นในแอป (เว้นว่างได้)"
+                    className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm"
+                  />
+                </div>
+              )}
               {cart.length === 0 ? (
                 <p className="text-sm text-[#8a7a68] py-6 text-center">ยังไม่มีรายการ</p>
               ) : (
@@ -693,6 +757,7 @@ export default function CoffeeShopSystem() {
                 <table className="w-full text-sm">
                   <thead className="bg-[#f5f1ea] text-[#8a7a68]">
                     <tr>
+                      <th className="text-left px-4 py-2">เลขออเดอร์</th>
                       <th className="text-left px-4 py-2">เวลา</th>
                       <th className="text-left px-4 py-2">ช่องทาง</th>
                       <th className="text-left px-4 py-2">รายการ</th>
@@ -703,6 +768,7 @@ export default function CoffeeShopSystem() {
                   <tbody>
                     {sales.slice(0, 50).map((o) => (
                       <tr key={o.id} className="border-t border-[#f0e6da]">
+                        <td className="px-4 py-2 font-semibold whitespace-nowrap" style={{ color: "#a6622f" }}>{o.orderNumber || "—"}</td>
                         <td className="px-4 py-2 text-[#8a7a68] whitespace-nowrap">{new Date(o.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}</td>
                         <td className="px-4 py-2 text-[#8a7a68]">{channels.find((c) => c.id === (o.channel || "walkin"))?.name || o.channel}</td>
                         <td className="px-4 py-2">{o.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</td>
@@ -727,6 +793,34 @@ export default function CoffeeShopSystem() {
               <h2 className="font-bold text-lg mb-3">โลโก้และสีธีมร้าน</h2>
               <div className="bg-white rounded-xl border border-[#e3d2bd] p-4 space-y-4">
                 <BrandingEditor settings={settings} onSave={updateSettings} />
+              </div>
+            </div>
+
+            {/* Order numbering */}
+            <div>
+              <h2 className="font-bold text-lg mb-3">เลขที่ออเดอร์ (หน้าร้าน)</h2>
+              <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+                <p className="text-xs text-[#8a7a68] mb-3">
+                  ออเดอร์หน้าร้านจะเรียงเลข 1, 2, 3... แล้วรีเซ็ตกลับเป็น 1 ตามรอบที่เลือก —
+                  ส่วนออเดอร์จากแอป delivery ให้พนักงานพิมพ์เลขที่จากแอปจริงตอนขาย (ดูได้ในหน้าขายหน้าร้าน)
+                </p>
+                <div className="flex gap-2 flex-wrap">
+                  {[
+                    ["day", "รีเซ็ตรายวัน (แนะนำ)"],
+                    ["month", "รีเซ็ตรายเดือน"],
+                    ["year", "รีเซ็ตรายปี"],
+                    ["never", "ไม่รีเซ็ต (เรียงไปเรื่อยๆ)"],
+                  ].map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => updateSettings({ walkinReset: val })}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border"
+                      style={(settings.walkinReset || "day") === val ? { backgroundColor: primary, color: "#fff", borderColor: primary } : { borderColor: "#e3d2bd", color: "#5a4a3a" }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -811,7 +905,7 @@ export default function CoffeeShopSystem() {
         <ChannelModal item={editChannel} onClose={() => { setEditChannel(null); setShowAddChannel(false); }} onSave={saveChannel} />
       )}
       {(editAddonGroup || showAddAddonGroup) && (
-        <AddonGroupModal item={editAddonGroup} onClose={() => { setEditAddonGroup(null); setShowAddAddonGroup(false); }} onSave={saveAddonGroup} />
+        <AddonGroupModal item={editAddonGroup} stock={stock} onClose={() => { setEditAddonGroup(null); setShowAddAddonGroup(false); }} onSave={saveAddonGroup} />
       )}
       {addonItem && (
         <AddonModal
@@ -979,12 +1073,12 @@ function ChannelModal({ item, onClose, onSave }) {
 }
 
 // ---------- Modal: กลุ่มตัวเลือกเสริม (คลังกลาง) ----------
-function AddonGroupModal({ item, onClose, onSave }) {
+function AddonGroupModal({ item, stock, onClose, onSave }) {
   const [name, setName] = useState(item?.name || "");
   const [multi, setMulti] = useState(item?.multi || false);
   const [options, setOptions] = useState(item?.options || []);
 
-  const addOption = () => setOptions((o) => [...o, { id: uid(), name: "", price: 0 }]);
+  const addOption = () => setOptions((o) => [...o, { id: uid(), name: "", price: 0, stockIng: "", stockQty: "" }]);
   const updateOption = (id, patch) => setOptions((o) => o.map((opt) => (opt.id === id ? { ...opt, ...patch } : opt)));
   const removeOption = (id) => setOptions((o) => o.filter((opt) => opt.id !== id));
 
@@ -1005,12 +1099,37 @@ function AddonGroupModal({ item, onClose, onSave }) {
           </label>
           <div>
             <div className="text-xs text-[#8a7a68] mb-1.5">ตัวเลือกในกลุ่มนี้</div>
-            <div className="space-y-1.5">
+            <p className="text-[11px] text-[#cbb9a8] mb-2">
+              ถ้าตัวเลือกนี้ควรตัดสต๊อกด้วย (เช่น เลือก "คั่วเข้ม" ให้ตัดสต๊อกคั่วเข้ม) ใส่วัตถุดิบ+ปริมาณต่อแก้วได้เลย ไม่ใส่ก็ได้ถ้าไม่ต้องตัดสต๊อก
+            </p>
+            <div className="space-y-2.5">
               {options.map((opt) => (
-                <div key={opt.id} className="flex items-center gap-2">
-                  <input value={opt.name} onChange={(e) => updateOption(opt.id, { name: e.target.value })} placeholder="ชื่อตัวเลือก" className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm" />
-                  <input type="number" value={opt.price} onChange={(e) => updateOption(opt.id, { price: Number(e.target.value) || 0 })} placeholder="+ราคา" className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-right" />
-                  <button onClick={() => removeOption(opt.id)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                <div key={opt.id} className="border border-[#f0e6da] rounded-lg p-2.5 bg-[#fdfaf6]">
+                  <div className="flex items-center gap-2">
+                    <input value={opt.name} onChange={(e) => updateOption(opt.id, { name: e.target.value })} placeholder="ชื่อตัวเลือก" className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm" />
+                    <input type="number" value={opt.price} onChange={(e) => updateOption(opt.id, { price: Number(e.target.value) || 0 })} placeholder="+ราคา" className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-right" />
+                    <button onClick={() => removeOption(opt.id)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5 pl-1">
+                    <span className="text-[11px] text-[#8a7a68] whitespace-nowrap">ตัดสต๊อก:</span>
+                    <select
+                      value={opt.stockIng || ""}
+                      onChange={(e) => updateOption(opt.id, { stockIng: e.target.value })}
+                      className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1 text-xs bg-white"
+                    >
+                      <option value="">— ไม่ตัดสต๊อก —</option>
+                      {stock.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    <input
+                      type="number"
+                      value={opt.stockQty || ""}
+                      onChange={(e) => updateOption(opt.id, { stockQty: e.target.value })}
+                      placeholder="ปริมาณ"
+                      disabled={!opt.stockIng}
+                      className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1 text-xs text-right disabled:bg-[#f5f1ea]"
+                    />
+                    <span className="text-[11px] text-[#8a7a68] w-10">{stock.find((s) => s.id === opt.stockIng)?.unit || ""}</span>
+                  </div>
                 </div>
               ))}
               <button onClick={addOption} className="text-xs font-medium flex items-center gap-1 mt-1" style={{ color: "#a6622f" }}><Plus size={12} /> เพิ่มตัวเลือก</button>
@@ -1046,11 +1165,11 @@ function AddonModal({ item, groups, basePrice, onClose, onConfirm }) {
     if (g.multi) {
       (sel || []).forEach((optId) => {
         const opt = g.options.find((o) => o.id === optId);
-        if (opt) chosenAddons.push({ id: opt.id, name: `${g.name}: ${opt.name}`, price: opt.price });
+        if (opt) chosenAddons.push({ id: opt.id, name: `${g.name}: ${opt.name}`, price: opt.price, stockIng: opt.stockIng || null, stockQty: Number(opt.stockQty) || 0 });
       });
     } else if (sel) {
       const opt = g.options.find((o) => o.id === sel);
-      if (opt) chosenAddons.push({ id: opt.id, name: `${g.name}: ${opt.name}`, price: opt.price });
+      if (opt) chosenAddons.push({ id: opt.id, name: `${g.name}: ${opt.name}`, price: opt.price, stockIng: opt.stockIng || null, stockQty: Number(opt.stockQty) || 0 });
     }
   });
   const total = basePrice + chosenAddons.reduce((s, a) => s + a.price, 0);
@@ -1104,7 +1223,12 @@ function MenuModal({ item, categories, stock, addonGroupsLib, channels, onClose,
   const [uploadError, setUploadError] = useState("");
   const [channelPrices, setChannelPrices] = useState(item?.channelPrices || {});
   const [addonGroupIds, setAddonGroupIds] = useState(item?.addonGroupIds || []);
-  const [recipe, setRecipe] = useState(item?.recipe || []);
+  const [recipe, setRecipe] = useState(() =>
+    (item?.recipe || []).map((row) => {
+      const exists = stock.some((s) => s.id === row.ing);
+      return exists ? row : { ...row, ing: stock[0]?.id || "", _wasOrphaned: true };
+    })
+  );
 
   const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
@@ -1181,13 +1305,24 @@ function MenuModal({ item, categories, stock, addonGroupsLib, channels, onClose,
               {recipe.map((row, idx) => {
                 const stockItem = stock.find((s) => s.id === row.ing);
                 return (
-                  <div key={idx} className="flex items-center gap-2">
-                    <select value={row.ing} onChange={(e) => updateRecipeRow(idx, { ing: e.target.value })} className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs bg-white">
-                      {stock.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                    <input type="number" value={row.qty} onChange={(e) => updateRecipeRow(idx, { qty: Number(e.target.value) || 0 })} className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs text-right" />
-                    <span className="text-xs text-[#8a7a68] w-10">{stockItem?.unit || ""}</span>
-                    <button onClick={() => removeRecipeRow(idx)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                  <div key={idx}>
+                    {row._wasOrphaned && (
+                      <div className="text-[11px] text-red-600 mb-1">
+                        ⚠ วัตถุดิบเดิมของแถวนี้ถูกลบไปแล้ว ระบบเลือกตัวแรกให้ชั่วคราว — กรุณาเลือกวัตถุดิบที่ถูกต้องแล้วกดบันทึก
+                      </div>
+                    )}
+                    <div className={`flex items-center gap-2 ${row._wasOrphaned ? "ring-2 ring-red-300 rounded-lg p-1" : ""}`}>
+                      <select
+                        value={row.ing}
+                        onChange={(e) => updateRecipeRow(idx, { ing: e.target.value, _wasOrphaned: false })}
+                        className="flex-1 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs bg-white"
+                      >
+                        {stock.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      <input type="number" value={row.qty} onChange={(e) => updateRecipeRow(idx, { qty: Number(e.target.value) || 0 })} className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-xs text-right" />
+                      <span className="text-xs text-[#8a7a68] w-10">{stockItem?.unit || ""}</span>
+                      <button onClick={() => removeRecipeRow(idx)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
+                    </div>
                   </div>
                 );
               })}
@@ -1231,7 +1366,7 @@ function MenuModal({ item, categories, stock, addonGroupsLib, channels, onClose,
         <button
           onClick={() =>
             name && price !== "" &&
-            onSave({ ...item, name, price: Number(price), categoryId, image, channelPrices, addonGroupIds, recipe })
+            onSave({ ...item, name, price: Number(price), categoryId, image, channelPrices, addonGroupIds, recipe: recipe.map(({ _wasOrphaned, ...r }) => r) })
           }
           className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
         >
@@ -1306,7 +1441,7 @@ function ReceiptModal({ order, channels, settings, onClose }) {
             <div className="text-xs text-[#8a7a68]">ใบเสร็จรับเงิน · {chName}</div>
           </div>
           <div className="text-xs text-[#8a7a68] mb-2">
-            เลขที่: {order.id}<br />
+            เลขที่ออเดอร์: <strong>{order.orderNumber || order.id}</strong><br />
             วันที่: {new Date(order.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
           </div>
           <div className="border-t border-dashed border-[#999] my-2" />
