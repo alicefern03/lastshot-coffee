@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Coffee, Plus, Minus, Trash2, Package, Receipt, AlertTriangle, X, Check,
   TrendingUp, Edit2, Printer, ChevronLeft, ChevronRight, Settings, Bike, Store,
-  Image as ImageIcon,
+  Image as ImageIcon, Wallet,
 } from "lucide-react";
 
 // ============================================================
@@ -32,9 +32,9 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const DEFAULT_STOCK = [
-  { id: "i1", name: "เมล็ดกาแฟ", unit: "g", qty: 5000, low: 500 },
-  { id: "i2", name: "นมสด", unit: "ml", qty: 6000, low: 1000 },
-  { id: "i3", name: "ผงชาเขียว", unit: "g", qty: 800, low: 100 },
+  { id: "i1", name: "เมล็ดกาแฟ", unit: "g", qty: 5000, low: 500, cost: 0.8 },
+  { id: "i2", name: "นมสด", unit: "ml", qty: 6000, low: 1000, cost: 0.1 },
+  { id: "i3", name: "ผงชาเขียว", unit: "g", qty: 800, low: 100, cost: 1.2 },
 ];
 
 const DEFAULT_MENU = [
@@ -129,22 +129,29 @@ export default function CoffeeShopSystem() {
   const [editAddonGroup, setEditAddonGroup] = useState(null);
   const [showAddAddonGroup, setShowAddAddonGroup] = useState(false);
   const [channelRef, setChannelRef] = useState("");
+  const [acctDate, setAcctDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [expenses, setExpenses] = useState(null);
+  const [editExpense, setEditExpense] = useState(null);
+  const [showAddExpense, setShowAddExpense] = useState(false);
+  const [accountingRange, setAccountingRange] = useState("today"); // today | week | month | all
 
   useEffect(() => {
     (async () => {
       try {
-        let [m, c, s, sl, st] = await Promise.all([
+        let [m, c, s, sl, st, ex] = await Promise.all([
           loadData("menu", null),
           loadData("categories", null),
           loadData("stock", null),
           loadData("sales", null),
           loadData("settings", null),
+          loadData("expenses", null),
         ]);
         if (m === null) { m = DEFAULT_MENU; await saveData("menu", m); }
         if (c === null) { c = DEFAULT_CATEGORIES; await saveData("categories", c); }
         if (s === null) { s = DEFAULT_STOCK; await saveData("stock", s); }
         if (sl === null) { sl = []; await saveData("sales", sl); }
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
+        if (ex === null) { ex = []; await saveData("expenses", ex); }
         // migrate: ensure new settings fields exist for older saved settings
         st = {
           ...DEFAULT_SETTINGS,
@@ -159,6 +166,7 @@ export default function CoffeeShopSystem() {
         setStock(s);
         setSales(sl);
         setSettings(st);
+        setExpenses(ex);
       } catch (e) {
         console.error(e);
         setConnectionError(true);
@@ -179,6 +187,7 @@ export default function CoffeeShopSystem() {
         if (row.key === "stock") setStock(row.value);
         if (row.key === "sales") setSales(row.value);
         if (row.key === "settings") setSettings(row.value);
+        if (row.key === "expenses") setExpenses(row.value);
       })
       .subscribe();
     return () => supabase.removeChannel(ch);
@@ -291,16 +300,23 @@ export default function CoffeeShopSystem() {
   const checkout = async () => {
     if (cart.length === 0) return;
     const newStock = stock.map((s) => ({ ...s }));
+    let cogs = 0;
     for (const line of cart) {
       const menuItem = menu.find((m) => m.id === line.id);
       (menuItem?.recipe || []).forEach((r) => {
         const s = newStock.find((x) => x.id === r.ing);
-        if (s) s.qty = Math.max(0, s.qty - r.qty * line.qty);
+        if (s) {
+          s.qty = Math.max(0, s.qty - r.qty * line.qty);
+          cogs += r.qty * line.qty * (s.cost || 0);
+        }
       });
       (line.addons || []).forEach((a) => {
         if (a.stockIng && a.stockQty) {
           const s = newStock.find((x) => x.id === a.stockIng);
-          if (s) s.qty = Math.max(0, s.qty - a.stockQty * line.qty);
+          if (s) {
+            s.qty = Math.max(0, s.qty - a.stockQty * line.qty);
+            cogs += a.stockQty * line.qty * (s.cost || 0);
+          }
         }
       });
     }
@@ -313,6 +329,7 @@ export default function CoffeeShopSystem() {
         id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x),
       })),
       total: cartTotal,
+      cogs: Math.round(cogs * 100) / 100,
       time: new Date().toISOString(),
     };
     const newSales = [order, ...sales];
@@ -381,6 +398,21 @@ export default function CoffeeShopSystem() {
     const newStock = stock.filter((s) => s.id !== id);
     setStock(newStock);
     await saveData("stock", newStock);
+  };
+
+  // ---- Expense ops ----
+  const saveExpense = async (exp) => {
+    const newExpenses = exp.id ? expenses.map((e) => (e.id === exp.id ? exp : e)) : [...expenses, { ...exp, id: uid() }];
+    setExpenses(newExpenses);
+    await saveData("expenses", newExpenses);
+    setEditExpense(null);
+    setShowAddExpense(false);
+    showToast("บันทึกค่าใช้จ่ายแล้ว");
+  };
+  const deleteExpense = async (id) => {
+    const newExpenses = expenses.filter((e) => e.id !== id);
+    setExpenses(newExpenses);
+    await saveData("expenses", newExpenses);
   };
 
   // ---- Settings: general ----
@@ -478,6 +510,7 @@ export default function CoffeeShopSystem() {
               ["stock", "สต๊อก", Package],
               ["menu", "เมนู", Coffee],
               ["report", "รายงาน", TrendingUp],
+              ["accounting", "บัญชี", Wallet],
               ["settings", "ตั้งค่า", Settings],
             ].map(([key, label, Icon]) => (
               <button
@@ -652,6 +685,7 @@ export default function CoffeeShopSystem() {
                     <th className="text-right px-4 py-2">คงเหลือ</th>
                     <th className="text-right px-4 py-2">หน่วย</th>
                     <th className="text-right px-4 py-2">แจ้งเตือนต่ำกว่า</th>
+                    <th className="text-right px-4 py-2">ต้นทุน/หน่วย</th>
                     <th className="px-4 py-2"></th>
                   </tr>
                 </thead>
@@ -662,6 +696,7 @@ export default function CoffeeShopSystem() {
                       <td className={`px-4 py-2 text-right ${s.qty <= s.low ? "text-red-600 font-semibold" : ""}`}>{s.qty.toLocaleString()}</td>
                       <td className="px-4 py-2 text-right text-[#8a7a68]">{s.unit}</td>
                       <td className="px-4 py-2 text-right text-[#8a7a68]">{s.low.toLocaleString()}</td>
+                      <td className="px-4 py-2 text-right text-[#8a7a68]">{s.cost ? THB(s.cost) : "—"}</td>
                       <td className="px-4 py-2 text-right">
                         <button onClick={() => setEditStock(s)} className="hover:underline mr-3 text-xs" style={{ color: "#a6622f" }}>แก้ไข</button>
                         <button onClick={() => deleteStockItem(s.id)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
@@ -784,6 +819,20 @@ export default function CoffeeShopSystem() {
               )}
             </div>
           </div>
+        )}
+
+        {tab === "accounting" && (
+          <AccountingTab
+            sales={sales}
+            expenses={expenses}
+            channels={channels}
+            acctDate={acctDate}
+            setAcctDate={setAcctDate}
+            onAddExpense={() => setShowAddExpense(true)}
+            onEditExpense={(exp) => setEditExpense(exp)}
+            onDeleteExpense={deleteExpense}
+            primary={primary}
+          />
         )}
 
         {tab === "settings" && (
@@ -939,6 +988,14 @@ export default function CoffeeShopSystem() {
             setLowStockConfirmItem(null);
             proceedAddItem(it);
           }}
+        />
+      )}
+      {(editExpense || showAddExpense) && (
+        <ExpenseModal
+          item={editExpense}
+          defaultDate={acctDate}
+          onClose={() => { setEditExpense(null); setShowAddExpense(false); }}
+          onSave={saveExpense}
         />
       )}
     </div>
@@ -1382,6 +1439,7 @@ function StockModal({ item, onClose, onSave }) {
   const [qty, setQty] = useState(item?.qty ?? "");
   const [unit, setUnit] = useState(item?.unit || "");
   const [low, setLow] = useState(item?.low ?? "");
+  const [cost, setCost] = useState(item?.cost ?? "");
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -1405,12 +1463,19 @@ function StockModal({ item, onClose, onSave }) {
               <input value={unit} onChange={(e) => setUnit(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
             </div>
           </div>
-          <div>
-            <label className="text-xs text-[#8a7a68]">แจ้งเตือนเมื่อต่ำกว่า</label>
-            <input type="number" value={low} onChange={(e) => setLow(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-[#8a7a68]">แจ้งเตือนเมื่อต่ำกว่า</label>
+              <input type="number" value={low} onChange={(e) => setLow(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-[#8a7a68]">ต้นทุน/หน่วย (บาท)</label>
+              <input type="number" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="เช่น 0.8" className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+            </div>
           </div>
+          <p className="text-[11px] text-[#cbb9a8]">ต้นทุน/หน่วย ใช้คำนวณต้นทุนวัตถุดิบอัตโนมัติในหน้า "บัญชี" — เว้นว่างได้ถ้ายังไม่อยากคิดต้นทุน</p>
         </div>
-        <button onClick={() => name && qty !== "" && onSave({ ...item, name, qty: Number(qty), unit, low: Number(low || 0) })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
+        <button onClick={() => name && qty !== "" && onSave({ ...item, name, qty: Number(qty), unit, low: Number(low || 0), cost: cost === "" ? 0 : Number(cost) })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
       </div>
     </div>
   );
@@ -1466,6 +1531,154 @@ function ReceiptModal({ order, channels, settings, onClose }) {
             <Printer size={14} /> พิมพ์ใบเสร็จ
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- แท็บบัญชี: รายรับ-รายจ่าย ต้นทุน กำไร/ขาดทุน ----------
+function AccountingTab({ sales, expenses, channels, acctDate, setAcctDate, onAddExpense, onEditExpense, onDeleteExpense, primary }) {
+  const dayKey = (iso) => new Date(iso).toISOString().slice(0, 10);
+  const daySales = (sales || []).filter((s) => dayKey(s.time) === acctDate);
+  const dayExpenses = (expenses || []).filter((e) => e.date === acctDate);
+
+  const revenue = daySales.reduce((s, o) => s + o.total, 0);
+  const cogs = daySales.reduce((s, o) => s + (o.cogs || 0), 0);
+  const grossProfit = revenue - cogs;
+  const totalExpenses = dayExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const netProfit = grossProfit - totalExpenses;
+
+  const byChannel = channels.map((ch) => ({
+    ...ch,
+    revenue: daySales.filter((s) => (s.channel || "walkin") === ch.id).reduce((s, o) => s + o.total, 0),
+    count: daySales.filter((s) => (s.channel || "walkin") === ch.id).length,
+  })).filter((c) => c.count > 0);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 className="font-bold text-lg">บัญชีรับ-จ่าย</h2>
+        <input
+          type="date"
+          value={acctDate}
+          onChange={(e) => setAcctDate(e.target.value)}
+          className="border border-[#e3d2bd] rounded-lg px-3 py-1.5 text-sm bg-white"
+        />
+      </div>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+          <div className="text-xs text-[#8a7a68]">รายรับ (ขายได้)</div>
+          <div className="text-xl font-bold mt-1" style={{ color: "#a6622f" }}>{THB(revenue)}</div>
+          <div className="text-[11px] text-[#8a7a68] mt-1">{daySales.length} ออเดอร์</div>
+        </div>
+        <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+          <div className="text-xs text-[#8a7a68]">ต้นทุนวัตถุดิบ (COGS)</div>
+          <div className="text-xl font-bold mt-1 text-orange-600">{THB(cogs)}</div>
+          <div className="text-[11px] text-[#8a7a68] mt-1">คำนวณจากสูตร+ตัวเลือกเสริมที่ตัดจริง</div>
+        </div>
+        <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+          <div className="text-xs text-[#8a7a68]">รายจ่ายอื่น (ค่าเช่า/ค่าแรง ฯลฯ)</div>
+          <div className="text-xl font-bold mt-1 text-red-500">{THB(totalExpenses)}</div>
+          <div className="text-[11px] text-[#8a7a68] mt-1">{dayExpenses.length} รายการ</div>
+        </div>
+        <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+          <div className="text-xs text-[#8a7a68]">กำไร/ขาดทุนสุทธิ</div>
+          <div className={`text-xl font-bold mt-1 ${netProfit >= 0 ? "text-green-600" : "text-red-600"}`}>{THB(netProfit)}</div>
+          <div className="text-[11px] text-[#8a7a68] mt-1">กำไรขั้นต้น {THB(grossProfit)}</div>
+        </div>
+      </div>
+
+      {byChannel.length > 0 && (
+        <div className="mb-6">
+          <h3 className="font-semibold text-sm text-[#8a7a68] mb-2">ยอดขายแยกตามช่องทาง</h3>
+          <div className="bg-white rounded-xl border border-[#e3d2bd] divide-y divide-[#f0e6da]">
+            {byChannel.map((c) => (
+              <div key={c.id} className="flex items-center justify-between p-3 text-sm">
+                <span className="font-medium">{c.name}</span>
+                <span className="text-[#8a7a68]">{c.count} ออเดอร์</span>
+                <span className="font-semibold" style={{ color: "#a6622f" }}>{THB(c.revenue)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-semibold text-sm text-[#8a7a68]">รายจ่ายอื่นของวันนี้</h3>
+        <button onClick={onAddExpense} className="flex items-center gap-1 text-white text-sm px-3 py-1.5 rounded-lg" style={{ backgroundColor: primary }}>
+          <Plus size={14} /> เพิ่มรายจ่าย
+        </button>
+      </div>
+      <div className="bg-white rounded-xl border border-[#e3d2bd] overflow-hidden">
+        {dayExpenses.length === 0 ? (
+          <p className="text-sm text-[#8a7a68] py-6 text-center">ยังไม่มีรายจ่ายในวันนี้</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-[#f5f1ea] text-[#8a7a68]">
+              <tr>
+                <th className="text-left px-4 py-2">รายการ</th>
+                <th className="text-right px-4 py-2">จำนวน</th>
+                <th className="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {dayExpenses.map((e) => (
+                <tr key={e.id} className="border-t border-[#f0e6da]">
+                  <td className="px-4 py-2">{e.name}</td>
+                  <td className="px-4 py-2 text-right font-semibold text-red-500">{THB(e.amount)}</td>
+                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                    <button onClick={() => onEditExpense(e)} className="mr-2" style={{ color: "#a6622f" }}><Edit2 size={14} /></button>
+                    <button onClick={() => onDeleteExpense(e.id)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <p className="text-[11px] text-[#cbb9a8] mt-4">
+        ต้นทุนวัตถุดิบ (COGS) คำนวณจาก "ต้นทุน/หน่วย" ที่ตั้งไว้ในหน้าสต๊อก × ปริมาณที่ใช้จริงต่อออเดอร์ —
+        ถ้าเมนูไหนยังไม่ตั้งต้นทุนวัตถุดิบไว้ ตัวเลข COGS จะนับเป็น 0 สำหรับเมนูนั้น ไปตั้งได้ที่หน้า "สต๊อก" ปุ่มแก้ไขแต่ละรายการ
+      </p>
+    </div>
+  );
+}
+
+// ---------- Modal: รายจ่าย ----------
+function ExpenseModal({ item, defaultDate, onClose, onSave }) {
+  const [name, setName] = useState(item?.name || "");
+  const [amount, setAmount] = useState(item?.amount ?? "");
+  const [date, setDate] = useState(item?.date || defaultDate);
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-5 w-full max-w-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">{item ? "แก้ไขรายจ่าย" : "เพิ่มรายจ่าย"}</h3>
+          <button onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-[#8a7a68]">รายการ เช่น ค่าเช่า, ค่าแรงพนักงาน, ค่าน้ำไฟ</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-[#8a7a68]">จำนวนเงิน (บาท)</label>
+            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-[#8a7a68]">วันที่</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+          </div>
+        </div>
+        <button
+          onClick={() => name && amount !== "" && onSave({ ...item, name, amount: Number(amount), date })}
+          className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm"
+        >
+          บันทึก
+        </button>
       </div>
     </div>
   );
