@@ -480,8 +480,9 @@ export default function CoffeeShopSystem() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#1c1410]">
-        <div className="text-[#d4a574] flex items-center gap-3 font-medium">
-          <Coffee className="animate-spin" size={22} /> กำลังโหลด...
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-12 h-12 rounded-full border-2 border-[#d4a574]/30 border-t-[#d4a574] animate-spin" />
+          <div className="text-[#d4a574] font-medium text-sm">กำลังโหลด...</div>
         </div>
       </div>
     );
@@ -494,17 +495,20 @@ export default function CoffeeShopSystem() {
 
   return (
     <div className="min-h-screen bg-[#fbf7f0] text-[#2b1d14]">
-      <header className="sticky top-0 z-20 text-[#fbf7f0] shadow-md" style={{ backgroundColor: primary }}>
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
+      <header className="sticky top-0 z-20 text-[#fbf7f0] shadow-lg" style={{ backgroundImage: `linear-gradient(135deg, ${primary}, ${primary}dd)` }}>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 font-bold text-base sm:text-lg tracking-tight flex-shrink-0">
             {settings.logoUrl ? (
-              <img src={settings.logoUrl} alt="logo" className="w-7 h-7 rounded-full object-cover" />
+              <img src={settings.logoUrl} alt="logo" className="w-8 h-8 rounded-full object-cover ring-2" style={{ "--tw-ring-color": accent }} />
             ) : (
-              <Coffee size={22} style={{ color: accent }} />
+              <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#00000030" }}>
+                <Coffee size={17} style={{ color: accent }} />
+              </div>
             )}
-            <span>{SHOP_NAME} — ระบบจัดการ</span>
+            <span className="hidden sm:inline">{SHOP_NAME} — ระบบจัดการ</span>
+            <span className="sm:hidden">{SHOP_NAME}</span>
           </div>
-          <nav className="flex gap-1 rounded-full p-1 flex-wrap" style={{ backgroundColor: "#00000030" }}>
+          <nav className="flex gap-1 rounded-full p-1 overflow-x-auto scroll-thin flex-shrink-0 max-w-full" style={{ backgroundColor: "#00000030" }}>
             {[
               ["pos", "ขายหน้าร้าน", Receipt],
               ["stock", "สต๊อก", Package],
@@ -516,11 +520,11 @@ export default function CoffeeShopSystem() {
               <button
                 key={key}
                 onClick={() => setTab(key)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all whitespace-nowrap"
                 style={tab === key ? { backgroundColor: accent, color: primary } : { color: "#cbb9a8" }}
               >
                 <Icon size={15} />
-                <span className="hidden sm:inline">{label}</span>
+                <span className="hidden md:inline">{label}</span>
               </button>
             ))}
           </nav>
@@ -528,9 +532,11 @@ export default function CoffeeShopSystem() {
       </header>
 
       {lowStockItems.length > 0 && (
-        <div className="bg-[#f5d6c6] text-[#7a3b1e] px-4 py-2 text-sm flex items-center gap-2 max-w-6xl mx-auto">
-          <AlertTriangle size={16} className="flex-shrink-0" />
-          <span>สต๊อกเหลือน้อย: {lowStockItems.map((s) => s.name).join(", ")}</span>
+        <div className="max-w-6xl mx-auto px-4 pt-3">
+          <div className="bg-[#fdf0e4] border border-[#f0c89a] text-[#9a5a1e] px-4 py-2.5 rounded-xl text-sm flex items-center gap-2">
+            <AlertTriangle size={16} className="flex-shrink-0" />
+            <span><strong className="font-semibold">สต๊อกเหลือน้อย:</strong> {lowStockItems.map((s) => s.name).join(", ")}</span>
+          </div>
         </div>
       )}
 
@@ -538,13 +544,13 @@ export default function CoffeeShopSystem() {
         {tab === "pos" && (
           <div className="grid md:grid-cols-3 gap-6">
             <div className="md:col-span-2">
-              <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+              <div className="flex gap-2 mb-5 overflow-x-auto scroll-thin pb-1">
                 {channels.map((ch) => (
                   <button
                     key={ch.id}
                     onClick={() => switchChannel(ch.id)}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border whitespace-nowrap transition-colors"
-                    style={channel === ch.id ? { backgroundColor: primary, color: "#fff", borderColor: primary } : { backgroundColor: "#fff", color: "#5a4a3a", borderColor: "#e3d2bd" }}
+                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-semibold border-2 whitespace-nowrap transition-all active:scale-95"
+                    style={channel === ch.id ? { backgroundColor: primary, color: "#fff", borderColor: primary } : { backgroundColor: "#fff", color: "#5a4a3a", borderColor: "#f0e6da" }}
                   >
                     {ch.id === "walkin" ? <Store size={14} /> : <Bike size={14} />} {ch.name}
                   </button>
@@ -561,9 +567,12 @@ export default function CoffeeShopSystem() {
                         <button
                           key={cat.id}
                           onClick={() => setOpenCategoryId(cat.id)}
-                          className="text-left p-4 rounded-xl border border-[#e3d2bd] bg-white hover:shadow-md transition-all flex items-center justify-between"
+                          className="text-left p-4 rounded-2xl border border-[#e3d2bd] bg-white shadow-sm hover:shadow-md active:scale-[0.98] transition-all flex items-center justify-between"
                         >
                           <div>
+                            <div className="w-9 h-9 rounded-full flex items-center justify-center mb-2" style={{ backgroundColor: `${accent}22` }}>
+                              <Coffee size={16} style={{ color: accent }} />
+                            </div>
                             <div className="font-semibold">{cat.name}</div>
                             <div className="text-xs text-[#8a7a68] mt-0.5">{count} เมนู</div>
                           </div>
@@ -571,6 +580,11 @@ export default function CoffeeShopSystem() {
                         </button>
                       );
                     })}
+                    {categories.length === 0 && (
+                      <div className="col-span-full py-10 text-center text-[#8a7a68] text-sm">
+                        ยังไม่มีหมวดหมู่ — ไปเพิ่มได้ที่แท็บ "เมนู"
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
@@ -588,33 +602,36 @@ export default function CoffeeShopSystem() {
                         <button
                           key={item.id}
                           onClick={() => handleItemClick(item)}
-                          className="text-left p-3 rounded-xl border transition-all bg-white hover:shadow-md active:scale-95"
-                          style={{ borderColor: status.ok ? "#e3d2bd" : "#f0b88a" }}
+                          className="text-left p-3 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md active:scale-95"
+                          style={{ borderColor: status.ok ? "#f0e6da" : "#f0b88a" }}
                         >
                           {item.image ? (
-                            <img src={item.image} alt={item.name} className="w-full h-20 object-cover rounded-lg mb-2" onError={(e) => (e.target.style.display = "none")} />
+                            <img src={item.image} alt={item.name} className="w-full h-20 object-cover rounded-xl mb-2" onError={(e) => (e.target.style.display = "none")} />
                           ) : (
-                            <div className="w-full h-20 rounded-lg mb-2 bg-[#f5f1ea] flex items-center justify-center">
+                            <div className="w-full h-20 rounded-xl mb-2 flex items-center justify-center" style={{ backgroundColor: `${accent}1a` }}>
                               <Coffee size={22} style={{ color: accent }} />
                             </div>
                           )}
-                          <div className="font-semibold text-sm">{item.name}</div>
-                          {groups.length > 0 && <div className="text-[10px] mt-0.5" style={{ color: accent }}>มีตัวเลือกเสริม</div>}
-                          <div className="font-bold mt-1.5" style={{ color: "#a6622f" }}>{THB(price)}</div>
+                          <div className="font-semibold text-sm leading-snug">{item.name}</div>
+                          {groups.length > 0 && <div className="text-[10px] mt-0.5 font-medium" style={{ color: accent }}>✦ มีตัวเลือกเสริม</div>}
+                          <div className="font-bold mt-1.5 text-base" style={{ color: "#a6622f" }}>{THB(price)}</div>
                           {channel !== "walkin" && <div className="text-[10px] text-[#8a7a68]">(หน้าร้าน {THB(item.price)})</div>}
-                          {!status.ok && <div className="text-[10px] text-orange-600 mt-1">⚠ {status.missing.join(", ")} ใกล้หมด/ไม่พอ</div>}
+                          {!status.ok && <div className="text-[10px] text-orange-600 mt-1 font-medium">⚠ {status.missing.join(", ")} ใกล้หมด/ไม่พอ</div>}
                         </button>
                       );
                     })}
                     {itemsInOpenCategory.length === 0 && (
-                      <p className="text-sm text-[#8a7a68] col-span-full py-6 text-center">ยังไม่มีเมนูในหมวดนี้</p>
+                      <div className="col-span-full py-12 text-center text-[#8a7a68]">
+                        <Coffee size={28} className="mx-auto mb-2 opacity-40" />
+                        <p className="text-sm">ยังไม่มีเมนูในหมวดนี้</p>
+                      </div>
                     )}
                   </div>
                 </>
               )}
             </div>
 
-            <div className="bg-white rounded-xl border border-[#e3d2bd] p-4 h-fit sticky top-20">
+            <div className="bg-white rounded-2xl border border-[#f0e6da] shadow-sm p-4 h-fit sticky top-24">
               <h2 className="font-bold text-lg mb-1 flex items-center gap-2">
                 <Receipt size={18} /> ออเดอร์
               </h2>
@@ -628,39 +645,43 @@ export default function CoffeeShopSystem() {
                     value={channelRef}
                     onChange={(e) => setChannelRef(e.target.value)}
                     placeholder="พิมพ์เลขที่ที่เห็นในแอป (เว้นว่างได้)"
-                    className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm"
+                    className="w-full border border-[#e3d2bd] rounded-xl px-3 py-2.5 mt-1 text-sm focus:outline-none focus:ring-2"
+                    style={{ "--tw-ring-color": accent }}
                   />
                 </div>
               )}
               {cart.length === 0 ? (
-                <p className="text-sm text-[#8a7a68] py-6 text-center">ยังไม่มีรายการ</p>
+                <div className="py-10 text-center text-[#8a7a68]">
+                  <Receipt size={26} className="mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">เลือกเมนูเพื่อเริ่มออเดอร์</p>
+                </div>
               ) : (
-                <div className="space-y-2 mb-3">
+                <div className="space-y-3 mb-3">
                   {cart.map((line) => (
-                    <div key={line.cartKey} className="flex items-center justify-between text-sm">
-                      <div className="flex-1">
+                    <div key={line.cartKey} className="flex items-center justify-between text-sm pb-2 border-b border-[#f5f1ea] last:border-0 last:pb-0">
+                      <div className="flex-1 pr-2">
                         <div className="font-medium">{line.name}</div>
                         {line.addons.length > 0 && <div className="text-[11px] text-[#8a7a68]">{line.addons.map((a) => a.name).join(", ")}</div>}
                         <div className="text-[#8a7a68]">{THB(line.basePrice + line.addons.reduce((s, a) => s + a.price, 0))}</div>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button onClick={() => changeQty(line.cartKey, -1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]"><Minus size={12} /></button>
-                        <span className="w-5 text-center">{line.qty}</span>
-                        <button onClick={() => changeQty(line.cartKey, 1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd]"><Plus size={12} /></button>
+                        <button onClick={() => changeQty(line.cartKey, -1)} className="w-7 h-7 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd] active:scale-90 transition-all"><Minus size={13} /></button>
+                        <span className="w-5 text-center font-medium">{line.qty}</span>
+                        <button onClick={() => changeQty(line.cartKey, 1)} className="w-7 h-7 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd] active:scale-90 transition-all"><Plus size={13} /></button>
                         <button onClick={() => removeFromCart(line.cartKey)} className="ml-1 text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-              <div className="border-t border-[#e3d2bd] pt-3 flex items-center justify-between font-bold">
+              <div className="border-t border-[#f0e6da] pt-3 flex items-center justify-between font-bold text-lg">
                 <span>รวม</span>
                 <span style={{ color: "#a6622f" }}>{THB(cartTotal)}</span>
               </div>
               <button
                 onClick={checkout}
                 disabled={cart.length === 0}
-                className="mt-3 w-full text-white rounded-lg py-2.5 font-semibold disabled:opacity-40 transition-colors"
+                className="mt-3 w-full text-white rounded-xl py-3.5 font-semibold text-base disabled:opacity-40 transition-all active:scale-[0.98] shadow-sm"
                 style={{ backgroundColor: primary }}
               >
                 ชำระเงิน
@@ -928,8 +949,11 @@ export default function CoffeeShopSystem() {
       </main>
 
       {toast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 shadow-lg z-50" style={{ backgroundColor: primary }}>
-          <Check size={14} style={{ color: accent }} /> {toast}
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 text-white pl-3 pr-4 py-2.5 rounded-full text-sm font-medium flex items-center gap-2 shadow-xl z-50" style={{ backgroundColor: primary }}>
+          <span className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: accent }}>
+            <Check size={12} style={{ color: primary }} />
+          </span>
+          {toast}
         </div>
       )}
 
