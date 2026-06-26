@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Coffee, Plus, Minus, Trash2, Package, Receipt, AlertTriangle, X, Check,
   TrendingUp, Edit2, Printer, ChevronLeft, ChevronRight, Settings, Bike, Store,
-  Image as ImageIcon, Wallet,
+  Image as ImageIcon, Wallet, Users, QrCode, Star, Phone,
 } from "lucide-react";
 
 // ============================================================
@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS = {
   addonGroups: DEFAULT_ADDON_GROUPS,
   walkinReset: "day", // day | month | year | never
   orderCounters: {},  // { walkin: {key, count}, grab: {count}, ... }
+  pointsRate: 10, // ทุกกี่บาทได้ 1 แต้ม
 };
 
 function periodKeyFor(resetMode) {
@@ -102,6 +103,14 @@ async function uploadImage(file, bucket = "menu-images") {
 }
 
 export default function CoffeeShopSystem() {
+  const customerPhoneParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("customer") : null;
+  if (customerPhoneParam) {
+    return <CustomerPointsView phone={customerPhoneParam} />;
+  }
+  return <CoffeeShopAdminApp />;
+}
+
+function CoffeeShopAdminApp() {
   const [tab, setTab] = useState("pos");
   const [menu, setMenu] = useState(null);
   const [categories, setCategories] = useState(null);
@@ -134,17 +143,23 @@ export default function CoffeeShopSystem() {
   const [editExpense, setEditExpense] = useState(null);
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [accountingRange, setAccountingRange] = useState("today"); // today | week | month | all
+  const [customers, setCustomers] = useState(null);
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [editCustomer, setEditCustomer] = useState(null);
+  const [qrCustomer, setQrCustomer] = useState(null);
+  const [customerSearch, setCustomerSearch] = useState("");
 
   useEffect(() => {
     (async () => {
       try {
-        let [m, c, s, sl, st, ex] = await Promise.all([
+        let [m, c, s, sl, st, ex, cu] = await Promise.all([
           loadData("menu", null),
           loadData("categories", null),
           loadData("stock", null),
           loadData("sales", null),
           loadData("settings", null),
           loadData("expenses", null),
+          loadData("customers", null),
         ]);
         if (m === null) { m = DEFAULT_MENU; await saveData("menu", m); }
         if (c === null) { c = DEFAULT_CATEGORIES; await saveData("categories", c); }
@@ -152,6 +167,7 @@ export default function CoffeeShopSystem() {
         if (sl === null) { sl = []; await saveData("sales", sl); }
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
         if (ex === null) { ex = []; await saveData("expenses", ex); }
+        if (cu === null) { cu = []; await saveData("customers", cu); }
         // migrate: ensure new settings fields exist for older saved settings
         st = {
           ...DEFAULT_SETTINGS,
@@ -160,6 +176,7 @@ export default function CoffeeShopSystem() {
           addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS,
           walkinReset: st.walkinReset || "day",
           orderCounters: st.orderCounters || {},
+          pointsRate: st.pointsRate || 10,
         };
         setMenu(m);
         setCategories(c);
@@ -167,6 +184,7 @@ export default function CoffeeShopSystem() {
         setSales(sl);
         setSettings(st);
         setExpenses(ex);
+        setCustomers(cu);
       } catch (e) {
         console.error(e);
         setConnectionError(true);
@@ -188,6 +206,7 @@ export default function CoffeeShopSystem() {
         if (row.key === "sales") setSales(row.value);
         if (row.key === "settings") setSettings(row.value);
         if (row.key === "expenses") setExpenses(row.value);
+        if (row.key === "customers") setCustomers(row.value);
       })
       .subscribe();
     return () => supabase.removeChannel(ch);
@@ -203,6 +222,22 @@ export default function CoffeeShopSystem() {
     (stock || []).forEach((s) => (map[s.id] = s));
     return map;
   }, [stock]);
+
+  const foundCustomer = useMemo(() => {
+    if (!customerPhone || customerPhone.length < 9) return null;
+    return (customers || []).find((c) => c.phone === customerPhone) || null;
+  }, [customers, customerPhone]);
+
+  const frequentItemsForCustomer = (customer) => {
+    if (!customer?.history) return [];
+    const counts = {};
+    customer.history.forEach((h) => (h.items || []).forEach((it) => { counts[it.id] = (counts[it.id] || 0) + it.qty; }));
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([id]) => menu.find((m) => m.id === id))
+      .filter(Boolean);
+  };
 
   const channels = settings?.channels || DEFAULT_CHANNELS;
   const addonGroupsLib = settings?.addonGroups || [];
@@ -321,6 +356,24 @@ export default function CoffeeShopSystem() {
       });
     }
     const { display: orderNumber, newCounters } = getNextOrderNumber(channel, channelRef);
+    let pointsEarned = 0;
+    let newCustomers = customers;
+    const phone = customerPhone.trim();
+    if (phone.length >= 9) {
+      const rate = settings.pointsRate || 10;
+      pointsEarned = Math.floor(cartTotal / rate);
+      const existing = customers.find((c) => c.phone === phone);
+      const historyEntry = { time: new Date().toISOString(), items: cart.map((x) => ({ id: x.id, name: x.name, qty: x.qty })), total: cartTotal };
+      if (existing) {
+        newCustomers = customers.map((c) =>
+          c.phone === phone
+            ? { ...c, points: (c.points || 0) + pointsEarned, history: [historyEntry, ...(c.history || [])].slice(0, 30) }
+            : c
+        );
+      } else {
+        newCustomers = [...customers, { id: uid(), phone, name: "", points: pointsEarned, history: [historyEntry] }];
+      }
+    }
     const order = {
       id: uid(),
       orderNumber,
@@ -331,16 +384,25 @@ export default function CoffeeShopSystem() {
       total: cartTotal,
       cogs: Math.round(cogs * 100) / 100,
       time: new Date().toISOString(),
+      customerPhone: phone.length >= 9 ? phone : null,
+      pointsEarned,
     };
     const newSales = [order, ...sales];
     const newSettings = { ...settings, orderCounters: newCounters };
     setStock(newStock);
     setSales(newSales);
     setSettings(newSettings);
+    setCustomers(newCustomers);
     setCart([]);
     setChannelRef("");
-    await Promise.all([saveData("stock", newStock), saveData("sales", newSales), saveData("settings", newSettings)]);
-    showToast(`บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber}`);
+    setCustomerPhone("");
+    await Promise.all([
+      saveData("stock", newStock),
+      saveData("sales", newSales),
+      saveData("settings", newSettings),
+      saveData("customers", newCustomers),
+    ]);
+    showToast(pointsEarned > 0 ? `บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber} · ได้ ${pointsEarned} แต้ม` : `บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber}`);
     setReceiptOrder(order);
   };
 
@@ -350,6 +412,21 @@ export default function CoffeeShopSystem() {
     await saveData("sales", newSales);
     setConfirmDeleteOrder(null);
     showToast("ลบรายการแล้ว");
+  };
+
+  // ---- Customer ops ----
+  const saveCustomer = async (cust) => {
+    const newCustomers = customers.map((c) => (c.id === cust.id ? { ...c, name: cust.name } : c));
+    setCustomers(newCustomers);
+    await saveData("customers", newCustomers);
+    setEditCustomer(null);
+    showToast("บันทึกข้อมูลลูกค้าแล้ว");
+  };
+  const deleteCustomer = async (id) => {
+    if (!window.confirm("ลบลูกค้าคนนี้และแต้มสะสมทั้งหมด?")) return;
+    const newCustomers = customers.filter((c) => c.id !== id);
+    setCustomers(newCustomers);
+    await saveData("customers", newCustomers);
   };
 
   // ---- Menu ops ----
@@ -515,6 +592,7 @@ export default function CoffeeShopSystem() {
               ["menu", "เมนู", Coffee],
               ["report", "รายงาน", TrendingUp],
               ["accounting", "บัญชี", Wallet],
+              ["customers", "ลูกค้า", Users],
               ["settings", "ตั้งค่า", Settings],
             ].map(([key, label, Icon]) => (
               <button
@@ -650,6 +728,43 @@ export default function CoffeeShopSystem() {
                   />
                 </div>
               )}
+
+              <div className="mb-3">
+                <label className="text-xs text-[#8a7a68] flex items-center gap-1"><Phone size={11} /> เบอร์โทรลูกค้า (ไม่บังคับ)</label>
+                <input
+                  value={customerPhone}
+                  onChange={(e) => setCustomerPhone(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                  placeholder="0812345678"
+                  inputMode="numeric"
+                  className="w-full border border-[#e3d2bd] rounded-xl px-3 py-2.5 mt-1 text-sm focus:outline-none focus:ring-2"
+                  style={{ "--tw-ring-color": accent }}
+                />
+                {foundCustomer && (
+                  <div className="mt-2 p-2.5 rounded-xl text-sm" style={{ backgroundColor: `${accent}1a` }}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold flex items-center gap-1"><Star size={13} style={{ color: accent }} /> {foundCustomer.name || "ลูกค้าประจำ"}</span>
+                      <span className="font-bold" style={{ color: "#a6622f" }}>{foundCustomer.points || 0} แต้ม</span>
+                    </div>
+                    {frequentItemsForCustomer(foundCustomer).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {frequentItemsForCustomer(foundCustomer).map((mi) => (
+                          <button
+                            key={mi.id}
+                            onClick={() => handleItemClick(mi)}
+                            className="text-xs px-2.5 py-1.5 rounded-full bg-white border border-[#e3d2bd] font-medium active:scale-95 transition-all"
+                          >
+                            + {mi.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {customerPhone.length >= 9 && !foundCustomer && (
+                  <p className="text-[11px] text-[#8a7a68] mt-1.5">ลูกค้าใหม่ — จะสร้างให้อัตโนมัติตอนชำระเงิน</p>
+                )}
+              </div>
+
               {cart.length === 0 ? (
                 <div className="py-10 text-center text-[#8a7a68]">
                   <Receipt size={26} className="mx-auto mb-2 opacity-30" />
@@ -856,6 +971,63 @@ export default function CoffeeShopSystem() {
           />
         )}
 
+        {tab === "customers" && (
+          <div>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h2 className="font-bold text-lg">ลูกค้าประจำ</h2>
+              <input
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+                placeholder="ค้นหาเบอร์โทรหรือชื่อ"
+                className="border border-[#e3d2bd] rounded-xl px-3 py-2 text-sm w-56"
+              />
+            </div>
+            <p className="text-xs text-[#8a7a68] mb-4">
+              ลูกค้าจะถูกสร้างอัตโนมัติเมื่อพนักงานใส่เบอร์โทรตอนขายในหน้า "ขายหน้าร้าน" — แต้มสะสมตามอัตราที่ตั้งไว้ในแท็บ "ตั้งค่า"
+            </p>
+            <div className="bg-white rounded-2xl border border-[#f0e6da] overflow-hidden">
+              {(customers || []).filter((c) => !customerSearch || c.phone.includes(customerSearch) || (c.name || "").includes(customerSearch)).length === 0 ? (
+                <div className="py-12 text-center text-[#8a7a68]">
+                  <Users size={26} className="mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">ยังไม่มีลูกค้าในระบบ</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-[#f5f1ea] text-[#8a7a68]">
+                    <tr>
+                      <th className="text-left px-4 py-2">เบอร์โทร</th>
+                      <th className="text-left px-4 py-2">ชื่อ</th>
+                      <th className="text-right px-4 py-2">แต้มสะสม</th>
+                      <th className="text-right px-4 py-2">สั่งล่าสุด</th>
+                      <th className="px-4 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customers
+                      .filter((c) => !customerSearch || c.phone.includes(customerSearch) || (c.name || "").includes(customerSearch))
+                      .sort((a, b) => (b.points || 0) - (a.points || 0))
+                      .map((c) => (
+                        <tr key={c.id} className="border-t border-[#f0e6da]">
+                          <td className="px-4 py-2 font-medium">{c.phone}</td>
+                          <td className="px-4 py-2 text-[#8a7a68]">{c.name || <span className="italic text-[#cbb9a8]">ยังไม่ระบุ</span>}</td>
+                          <td className="px-4 py-2 text-right font-bold" style={{ color: "#a6622f" }}>{c.points || 0}</td>
+                          <td className="px-4 py-2 text-right text-[#8a7a68] whitespace-nowrap">
+                            {c.history?.[0]?.time ? new Date(c.history[0].time).toLocaleDateString("th-TH") : "—"}
+                          </td>
+                          <td className="px-4 py-2 text-right whitespace-nowrap">
+                            <button onClick={() => setQrCustomer(c)} className="mr-2" style={{ color: "#a6622f" }} title="QR สะสมแต้ม"><QrCode size={15} /></button>
+                            <button onClick={() => setEditCustomer(c)} className="mr-2" style={{ color: "#a6622f" }} title="แก้ไขชื่อ"><Edit2 size={15} /></button>
+                            <button onClick={() => deleteCustomer(c.id)} className="text-red-400 hover:text-red-600" title="ลบ"><Trash2 size={15} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
         {tab === "settings" && (
           <div className="space-y-8">
             {/* Branding */}
@@ -890,6 +1062,26 @@ export default function CoffeeShopSystem() {
                       {label}
                     </button>
                   ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Loyalty points */}
+            <div>
+              <h2 className="font-bold text-lg mb-3">ระบบสะสมแต้ม</h2>
+              <div className="bg-white rounded-xl border border-[#e3d2bd] p-4">
+                <p className="text-xs text-[#8a7a68] mb-3">
+                  ลูกค้าได้แต้มทุกครั้งที่ซื้อโดยใส่เบอร์โทรตอนขาย ตั้งอัตราแลกแต้มได้ที่นี่
+                </p>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-[#5a4a3a]">ทุก</span>
+                  <input
+                    type="number"
+                    value={settings.pointsRate || 10}
+                    onChange={(e) => updateSettings({ pointsRate: Number(e.target.value) || 1 })}
+                    className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-center"
+                  />
+                  <span className="text-sm text-[#5a4a3a]">บาท ได้ 1 แต้ม</span>
                 </div>
               </div>
             </div>
@@ -1021,6 +1213,12 @@ export default function CoffeeShopSystem() {
           onClose={() => { setEditExpense(null); setShowAddExpense(false); }}
           onSave={saveExpense}
         />
+      )}
+      {editCustomer && (
+        <CustomerEditModal item={editCustomer} onClose={() => setEditCustomer(null)} onSave={saveCustomer} />
+      )}
+      {qrCustomer && (
+        <CustomerQrModal customer={qrCustomer} onClose={() => setQrCustomer(null)} />
       )}
     </div>
   );
@@ -1547,6 +1745,11 @@ function ReceiptModal({ order, channels, settings, onClose }) {
           <div className="flex justify-between font-bold text-base">
             <span>รวม</span><span>{THB(order.total)}</span>
           </div>
+          {order.customerPhone && (
+            <div className="text-xs text-[#8a7a68] mt-2 pt-2 border-t border-dashed border-[#999]">
+              ลูกค้า: {order.customerPhone} · ได้แต้มสะสม <strong>{order.pointsEarned || 0}</strong> แต้ม
+            </div>
+          )}
           <div className="text-center text-xs text-[#8a7a68] mt-4">ขอบคุณที่ใช้บริการ</div>
         </div>
         <div className="no-print flex gap-2 p-4 pt-0">
@@ -1703,6 +1906,118 @@ function ExpenseModal({ item, defaultDate, onClose, onSave }) {
         >
           บันทึก
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Modal: แก้ไขชื่อลูกค้า ----------
+function CustomerEditModal({ item, onClose, onSave }) {
+  const [name, setName] = useState(item?.name || "");
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-5 w-full max-w-sm">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">แก้ไขข้อมูลลูกค้า</h3>
+          <button onClick={onClose}><X size={18} /></button>
+        </div>
+        <p className="text-xs text-[#8a7a68] mb-3">เบอร์โทร: {item.phone}</p>
+        <label className="text-xs text-[#8a7a68]">ชื่อลูกค้า</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น คุณสมชาย" className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
+        <button onClick={() => onSave({ ...item, name })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Modal: QR สะสมแต้มของลูกค้า ----------
+function CustomerQrModal({ customer, onClose }) {
+  const pointsUrl = `${window.location.origin}${window.location.pathname}?customer=${encodeURIComponent(customer.phone)}`;
+  const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pointsUrl)}`;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-5 w-full max-w-sm text-center">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">QR สะสมแต้ม</h3>
+          <button onClick={onClose}><X size={18} /></button>
+        </div>
+        <p className="text-sm text-[#8a7a68] mb-3">{customer.name || "ลูกค้า"} · {customer.phone}</p>
+        <img src={qrImg} alt="QR points" className="mx-auto rounded-lg border border-[#e3d2bd]" width={240} height={240} />
+        <p className="text-xs text-[#8a7a68] mt-3">ให้ลูกค้าสแกนเพื่อดูแต้มสะสมของตัวเอง — บันทึกรูปหรือพิมพ์แจกลูกค้าได้</p>
+        <p className="text-[11px] text-[#cbb9a8] mt-1 break-all">{pointsUrl}</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------- หน้าลูกค้าดูแต้มของตัวเอง (เข้าผ่านลิงก์ QR ไม่ต้อง login) ----------
+function CustomerPointsView({ phone }) {
+  const [customer, setCustomer] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await loadData("customers", []);
+        const found = (list || []).find((c) => c.phone === phone);
+        if (found) setCustomer(found);
+        else setNotFound(true);
+      } catch (e) {
+        console.error(e);
+        setNotFound(true);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [phone]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#1c1410]">
+        <div className="w-10 h-10 rounded-full border-2 border-[#d4a574]/30 border-t-[#d4a574] animate-spin" />
+      </div>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#fbf7f0] p-6">
+        <div className="text-center">
+          <Users size={32} className="mx-auto mb-3 text-[#cbb9a8]" />
+          <p className="text-[#5a4a3a]">ไม่พบข้อมูลลูกค้า เบอร์ {phone}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#fbf7f0] flex items-center justify-center p-6">
+      <div className="bg-white rounded-3xl shadow-lg p-8 w-full max-w-sm text-center border border-[#f0e6da]">
+        <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ backgroundColor: "#d4a57422" }}>
+          <Star size={28} style={{ color: "#a6622f" }} />
+        </div>
+        <h1 className="font-bold text-xl" style={{ color: "#2b1d14" }}>{SHOP_NAME}</h1>
+        <p className="text-sm text-[#8a7a68] mt-1">{customer.name || "ลูกค้าประจำ"} · {customer.phone}</p>
+        <div className="mt-6">
+          <div className="text-5xl font-extrabold" style={{ color: "#a6622f" }}>{customer.points || 0}</div>
+          <div className="text-sm text-[#8a7a68] mt-1">แต้มสะสม</div>
+        </div>
+        {customer.history?.length > 0 && (
+          <div className="mt-6 text-left">
+            <div className="text-xs font-semibold text-[#8a7a68] mb-2">การสั่งล่าสุด</div>
+            <div className="space-y-1.5">
+              {customer.history.slice(0, 5).map((h, i) => (
+                <div key={i} className="text-xs text-[#5a4a3a] flex justify-between border-b border-[#f5f1ea] pb-1.5">
+                  <span>{h.items.map((it) => it.name).join(", ")}</span>
+                  <span className="text-[#8a7a68] flex-shrink-0 ml-2">{new Date(h.time).toLocaleDateString("th-TH")}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <p className="text-[11px] text-[#cbb9a8] mt-6">แจ้งพนักงานเพื่อใช้แต้มแลกของได้ที่หน้าร้าน</p>
       </div>
     </div>
   );
