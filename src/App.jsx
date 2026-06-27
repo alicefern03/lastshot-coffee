@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Coffee, Plus, Minus, Trash2, Package, Receipt, AlertTriangle, X, Check,
   TrendingUp, Edit2, Printer, ChevronLeft, ChevronRight, Settings, Bike, Store,
-  Image as ImageIcon, Wallet, Users, QrCode, Star, Phone,
+  Image as ImageIcon, Wallet, Users, QrCode, Star, Phone, ClipboardList, Smartphone,
 } from "lucide-react";
 
 // ============================================================
@@ -24,6 +24,40 @@ function suggestedChannelPrice(basePrice, gpPercent) {
   if (!gpPercent) return basePrice;
   const raw = basePrice / (1 - gpPercent / 100);
   return Math.ceil(raw / 5) * 5;
+}
+
+// ---------- PromptPay QR (มาตรฐาน EMV QR ของไทย — ไม่ต้องพึ่ง payment gateway) ----------
+function ppCrc16(data) {
+  let crc = 0xffff;
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 0x8000) !== 0 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+function ppField(id, value) {
+  return `${id}${String(value.length).padStart(2, "0")}${value}`;
+}
+function ppSanitizeTarget(target) {
+  let s = target.replace(/[^0-9]/g, "");
+  if (s.length >= 13) return s.substring(0, 13);
+  s = s.substring(s.length - 9);
+  return `0066${s}`;
+}
+function generatePromptPayPayload(target, amount) {
+  if (!target) return null;
+  const formattedTarget = ppSanitizeTarget(target);
+  let data =
+    ppField("00", "01") +
+    ppField("01", amount ? "12" : "11") +
+    ppField("29", ppField("00", "A000000677010111") + ppField(formattedTarget.length === 13 ? "02" : "01", formattedTarget)) +
+    ppField("58", "TH");
+  if (amount) data += ppField("54", Number(amount).toFixed(2));
+  data += "6304";
+  return data + ppCrc16(data);
 }
 
 const DEFAULT_CATEGORIES = [
@@ -70,6 +104,7 @@ const DEFAULT_SETTINGS = {
   pointsPerItem: 1,    // ได้กี่แต้มต่อ 1 แก้วที่ขาย
   redeemThreshold: 10, // ครบกี่แต้มแลกแก้วฟรีได้ 1 แก้ว
   freeDrinkValue: 50,  // มูลค่าแก้วฟรีสูงสุด (บาท) ถ้าราคาเกินนี้ลูกค้าจ่ายส่วนต่าง
+  promptPayId: "",     // เบอร์โทร/เลขบัตรประชาชน PromptPay ของร้าน สำหรับรับเงินสั่งล่วงหน้า
 };
 
 function periodKeyFor(resetMode) {
@@ -105,9 +140,14 @@ async function uploadImage(file, bucket = "menu-images") {
 }
 
 export default function CoffeeShopSystem() {
-  const customerPhoneParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("customer") : null;
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const customerPhoneParam = params?.get("customer");
+  const isPreorderView = params?.get("preorder") === "1";
   if (customerPhoneParam) {
     return <CustomerPointsView phone={customerPhoneParam} />;
+  }
+  if (isPreorderView) {
+    return <PreOrderView />;
   }
   return <CoffeeShopAdminApp />;
 }
@@ -151,11 +191,12 @@ function CoffeeShopAdminApp() {
   const [qrCustomer, setQrCustomer] = useState(null);
   const [customerSearch, setCustomerSearch] = useState("");
   const [redeemMode, setRedeemMode] = useState(false);
+  const [preorders, setPreorders] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
-        let [m, c, s, sl, st, ex, cu] = await Promise.all([
+        let [m, c, s, sl, st, ex, cu, po] = await Promise.all([
           loadData("menu", null),
           loadData("categories", null),
           loadData("stock", null),
@@ -163,6 +204,7 @@ function CoffeeShopAdminApp() {
           loadData("settings", null),
           loadData("expenses", null),
           loadData("customers", null),
+          loadData("preorders", null),
         ]);
         if (m === null) { m = DEFAULT_MENU; await saveData("menu", m); }
         if (c === null) { c = DEFAULT_CATEGORIES; await saveData("categories", c); }
@@ -171,17 +213,23 @@ function CoffeeShopAdminApp() {
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
         if (ex === null) { ex = []; await saveData("expenses", ex); }
         if (cu === null) { cu = []; await saveData("customers", cu); }
+        if (po === null) { po = []; await saveData("preorders", po); }
         // migrate: ensure new settings fields exist for older saved settings
+        let mergedChannels = st.channels || DEFAULT_CHANNELS;
+        if (!mergedChannels.some((c2) => c2.id === "preorder")) {
+          mergedChannels = [...mergedChannels, { id: "preorder", name: "สั่งล่วงหน้า", gp: 0, builtin: true }];
+        }
         st = {
           ...DEFAULT_SETTINGS,
           ...st,
-          channels: st.channels || DEFAULT_CHANNELS,
+          channels: mergedChannels,
           addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS,
           walkinReset: st.walkinReset || "day",
           orderCounters: st.orderCounters || {},
           pointsPerItem: st.pointsPerItem || 1,
           redeemThreshold: st.redeemThreshold || 10,
           freeDrinkValue: st.freeDrinkValue ?? 50,
+          promptPayId: st.promptPayId || "",
         };
         setMenu(m);
         setCategories(c);
@@ -190,6 +238,7 @@ function CoffeeShopAdminApp() {
         setSettings(st);
         setExpenses(ex);
         setCustomers(cu);
+        setPreorders(po);
       } catch (e) {
         console.error(e);
         setConnectionError(true);
@@ -212,6 +261,7 @@ function CoffeeShopAdminApp() {
         if (row.key === "settings") setSettings(row.value);
         if (row.key === "expenses") setExpenses(row.value);
         if (row.key === "customers") setCustomers(row.value);
+        if (row.key === "preorders") setPreorders(row.value);
       })
       .subscribe();
     return () => supabase.removeChannel(ch);
@@ -462,6 +512,96 @@ function CoffeeShopAdminApp() {
     await saveData("customers", newCustomers);
   };
 
+  // ---- Preorder ops ----
+  const confirmPreorder = async (po) => {
+    const newStock = stock.map((s) => ({ ...s }));
+    let cogs = 0;
+    po.items.forEach((line) => {
+      const menuItem = menu.find((m) => m.id === line.id);
+      (menuItem?.recipe || []).forEach((r) => {
+        const s = newStock.find((x) => x.id === r.ing);
+        if (s) {
+          s.qty = Math.max(0, s.qty - r.qty * line.qty);
+          cogs += (s.cost || 0) * r.qty * line.qty;
+        }
+      });
+      (line.addons || []).forEach((a) => {
+        if (a.stockIng && a.stockQty) {
+          const s = newStock.find((x) => x.id === a.stockIng);
+          if (s) {
+            s.qty = Math.max(0, s.qty - a.stockQty * line.qty);
+            cogs += (s.cost || 0) * a.stockQty * line.qty;
+          }
+        }
+      });
+    });
+
+    const counters = settings.orderCounters || {};
+    const poEntry = counters.preorder || { count: 0 };
+    const nextNum = poEntry.count + 1;
+    const orderNumber = `PO-${String(nextNum).padStart(3, "0")}`;
+    const newCounters = { ...counters, preorder: { count: nextNum } };
+
+    let pointsEarned = 0;
+    let newCustomers = customers;
+    const phone = po.customerPhone;
+    if (phone) {
+      const pointsPerItem = settings.pointsPerItem ?? 1;
+      const qtySum = po.items.reduce((s, l) => s + l.qty, 0);
+      pointsEarned = qtySum * pointsPerItem;
+      const existing = customers.find((c) => c.phone === phone);
+      const historyEntry = { time: new Date().toISOString(), items: po.items.map((x) => ({ id: x.id, name: x.name, qty: x.qty })), total: po.total };
+      if (existing) {
+        newCustomers = customers.map((c) =>
+          c.phone === phone
+            ? { ...c, name: c.name || po.customerName || "", points: (c.points || 0) + pointsEarned, history: [historyEntry, ...(c.history || [])].slice(0, 30) }
+            : c
+        );
+      } else {
+        newCustomers = [...customers, { id: uid(), phone, name: po.customerName || "", points: pointsEarned, history: [historyEntry] }];
+      }
+    }
+
+    const order = {
+      id: uid(),
+      orderNumber,
+      channel: "preorder",
+      items: po.items,
+      total: po.total,
+      cogs: Math.round(cogs * 100) / 100,
+      time: new Date().toISOString(),
+      customerPhone: phone || null,
+      pointsEarned,
+      pointsUsed: 0,
+    };
+
+    const newSales = [order, ...sales];
+    const newSettings = { ...settings, orderCounters: newCounters };
+    const newPreorders = preorders.map((p) => (p.id === po.id ? { ...p, status: "confirmed", confirmedOrderId: order.id, orderNumber } : p));
+
+    setStock(newStock);
+    setSales(newSales);
+    setSettings(newSettings);
+    setCustomers(newCustomers);
+    setPreorders(newPreorders);
+
+    await Promise.all([
+      saveData("stock", newStock),
+      saveData("sales", newSales),
+      saveData("settings", newSettings),
+      saveData("customers", newCustomers),
+      saveData("preorders", newPreorders),
+    ]);
+    showToast(`ยืนยันออเดอร์ ${orderNumber} แล้ว`);
+  };
+
+  const cancelPreorder = async (po) => {
+    if (!window.confirm("ยกเลิกออเดอร์ล่วงหน้านี้?")) return;
+    const newPreorders = preorders.map((p) => (p.id === po.id ? { ...p, status: "cancelled" } : p));
+    setPreorders(newPreorders);
+    await saveData("preorders", newPreorders);
+  };
+
   // ---- Menu ops ----
   const saveMenuItem = async (item) => {
     const newMenu = item.id ? menu.map((m) => (m.id === item.id ? item : m)) : [...menu, { ...item, id: uid() }];
@@ -626,6 +766,7 @@ function CoffeeShopAdminApp() {
               ["report", "รายงาน", TrendingUp],
               ["accounting", "บัญชี", Wallet],
               ["customers", "ลูกค้า", Users],
+              ["preorders", "ออเดอร์ล่วงหน้า", ClipboardList],
               ["settings", "ตั้งค่า", Settings],
             ].map(([key, label, Icon]) => (
               <button
@@ -656,7 +797,7 @@ function CoffeeShopAdminApp() {
           <div className="grid md:grid-cols-3 gap-6">
             <div className="md:col-span-2">
               <div className="flex gap-2 mb-5 overflow-x-auto scroll-thin pb-1">
-                {channels.map((ch) => (
+                {channels.filter((ch) => ch.id !== "preorder").map((ch) => (
                   <button
                     key={ch.id}
                     onClick={() => switchChannel(ch.id)}
@@ -1083,6 +1224,73 @@ function CoffeeShopAdminApp() {
           </div>
         )}
 
+        {tab === "preorders" && (
+          <div>
+            <h2 className="font-bold text-lg mb-1">ออเดอร์ล่วงหน้า</h2>
+            <p className="text-xs text-[#8a7a68] mb-4">
+              ออเดอร์ที่ลูกค้าสั่งและโอนเงินผ่านลิงก์สั่งล่วงหน้า — เช็คยอดโอนเข้าบัญชีร้านในแอปธนาคารก่อน แล้วกด "ยืนยันรับเงินแล้ว" เพื่อตัดสต๊อกและให้แต้มลูกค้า
+            </p>
+            <div className="space-y-3">
+              {(preorders || []).filter((p) => p.status === "pending_confirm").length === 0 && (
+                <div className="bg-white rounded-2xl border border-[#f0e6da] py-12 text-center text-[#8a7a68]">
+                  <ClipboardList size={26} className="mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">ยังไม่มีออเดอร์ล่วงหน้าที่รออยู่</p>
+                </div>
+              )}
+              {(preorders || [])
+                .filter((p) => p.status === "pending_confirm")
+                .sort((a, b) => new Date(b.time) - new Date(a.time))
+                .map((po) => (
+                  <div key={po.id} className="bg-white rounded-2xl border border-[#f0e6da] p-4">
+                    <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                      <div>
+                        <span className="font-semibold">{po.customerName || "ลูกค้า"}</span>
+                        <span className="text-[#8a7a68] text-sm ml-2">{po.customerPhone}</span>
+                      </div>
+                      <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-[#fdf0e4] text-[#9a5a1e]">รอยืนยันรับเงิน</span>
+                    </div>
+                    <div className="text-sm text-[#5a4a3a] mb-2">
+                      {po.items.map((it) => `${it.name} x${it.qty}`).join(", ")}
+                    </div>
+                    <div className="text-xs text-[#8a7a68] mb-3">
+                      สั่งเมื่อ {new Date(po.time).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
+                      {po.pickupNote && <> · รับ: {po.pickupNote}</>}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-lg" style={{ color: "#a6622f" }}>{THB(po.total)}</span>
+                      <div className="flex gap-2">
+                        <button onClick={() => cancelPreorder(po)} className="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-500 font-medium">ยกเลิก</button>
+                        <button onClick={() => confirmPreorder(po)} className="text-sm px-3 py-1.5 rounded-lg text-white font-semibold" style={{ backgroundColor: primary }}>
+                          ✓ ยืนยันรับเงินแล้ว
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            {(preorders || []).some((p) => p.status !== "pending_confirm") && (
+              <div className="mt-8">
+                <h3 className="font-semibold text-sm text-[#8a7a68] mb-2">ประวัติ</h3>
+                <div className="bg-white rounded-2xl border border-[#f0e6da] divide-y divide-[#f0e6da]">
+                  {preorders
+                    .filter((p) => p.status !== "pending_confirm")
+                    .sort((a, b) => new Date(b.time) - new Date(a.time))
+                    .slice(0, 20)
+                    .map((po) => (
+                      <div key={po.id} className="flex items-center justify-between p-3 text-sm">
+                        <span>{po.customerName || po.customerPhone} · {po.items.map((it) => it.name).join(", ")}</span>
+                        <span className={po.status === "confirmed" ? "text-green-600 font-medium" : "text-red-400"}>
+                          {po.status === "confirmed" ? `✓ ${po.orderNumber || ""}` : "ยกเลิกแล้ว"}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === "settings" && (
           <div className="space-y-8">
             {/* Branding */}
@@ -1158,6 +1366,46 @@ function CoffeeShopAdminApp() {
                   />
                   <span className="text-sm text-[#5a4a3a]">บาท (เกินนี้ลูกค้าจ่ายส่วนต่าง)</span>
                 </div>
+              </div>
+            </div>
+
+            {/* Online ordering / PromptPay */}
+            <div>
+              <h2 className="font-bold text-lg mb-3">สั่งล่วงหน้าออนไลน์ + รับเงิน PromptPay</h2>
+              <div className="bg-white rounded-xl border border-[#e3d2bd] p-4 space-y-3">
+                <p className="text-xs text-[#8a7a68]">
+                  ใส่เบอร์โทรหรือเลขบัตรประชาชนที่ผูก PromptPay ของร้าน ลูกค้าจะสั่งและจ่ายผ่าน QR ได้ทันที —
+                  <strong> ระบบยังไม่ยืนยันเงินอัตโนมัติ</strong> พนักงานต้องเช็คยอดในแอปธนาคารแล้วกดยืนยันเองที่แท็บ "ออเดอร์ล่วงหน้า"
+                </p>
+                <div>
+                  <label className="text-xs text-[#8a7a68]">เบอร์โทร/เลขบัตร PromptPay ของร้าน</label>
+                  <input
+                    value={settings.promptPayId || ""}
+                    onChange={(e) => updateSettings({ promptPayId: e.target.value.replace(/[^0-9]/g, "") })}
+                    placeholder="0812345678"
+                    className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm"
+                  />
+                </div>
+                {settings.promptPayId && (
+                  <div className="pt-2 border-t border-[#f0e6da]">
+                    <p className="text-xs text-[#8a7a68] mb-2">ลิงก์สั่งล่วงหน้าสำหรับลูกค้า — แชร์หรือติด QR ที่หน้าร้าน:</p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        readOnly
+                        value={`${window.location.origin}${window.location.pathname}?preorder=1`}
+                        className="flex-1 border border-[#e3d2bd] rounded-lg px-3 py-2 text-xs bg-[#f5f1ea]"
+                        onClick={(e) => e.target.select()}
+                      />
+                    </div>
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?preorder=1`)}`}
+                      alt="QR สั่งล่วงหน้า"
+                      className="mt-3 rounded-lg border border-[#e3d2bd]"
+                      width={140}
+                      height={140}
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2096,6 +2344,293 @@ function CustomerPointsView({ phone }) {
         )}
         <p className="text-[11px] text-[#cbb9a8] mt-6">แจ้งพนักงานเพื่อใช้แต้มแลกของได้ที่หน้าร้าน</p>
       </div>
+    </div>
+  );
+}
+
+// ---------- หน้าสั่งล่วงหน้าออนไลน์สำหรับลูกค้า (เข้าผ่านลิงก์/QR ไม่ต้อง login) ----------
+function PreOrderView() {
+  const [menu, setMenu] = useState(null);
+  const [categories, setCategories] = useState(null);
+  const [settings, setSettings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [openCategoryId, setOpenCategoryId] = useState(null);
+  const [cart, setCart] = useState([]);
+  const [addonItem, setAddonItem] = useState(null);
+  const [step, setStep] = useState("menu"); // menu | info | pay | done
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [pickupNote, setPickupNote] = useState("ตอนนี้");
+  const [submittedOrder, setSubmittedOrder] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const [m, c, st] = await Promise.all([
+        loadData("menu", []),
+        loadData("categories", []),
+        loadData("settings", DEFAULT_SETTINGS),
+      ]);
+      setMenu(m || []);
+      setCategories(c || []);
+      setSettings({ ...DEFAULT_SETTINGS, ...st });
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading || !settings) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#1c1410]">
+        <div className="w-10 h-10 rounded-full border-2 border-[#d4a574]/30 border-t-[#d4a574] animate-spin" />
+      </div>
+    );
+  }
+
+  const primary = settings.primaryColor || "#2b1d14";
+  const accent = settings.accentColor || "#d4a574";
+
+  const addonGroupsLib = settings.addonGroups || [];
+  const resolvedAddonGroupsForItem = (item) => (item.addonGroupIds || []).map((gid) => addonGroupsLib.find((g) => g.id === gid)).filter(Boolean);
+
+  const addToCartDirect = (item, addons = []) => {
+    const cartKey = item.id + "::" + addons.map((a) => a.id).sort().join(",");
+    setCart((c) => {
+      const ex = c.find((x) => x.cartKey === cartKey);
+      if (ex) return c.map((x) => (x.cartKey === cartKey ? { ...x, qty: x.qty + 1 } : x));
+      return [...c, { cartKey, id: item.id, name: item.name, basePrice: item.price, addons, qty: 1 }];
+    });
+  };
+  const handleItemClick = (item) => {
+    const groups = resolvedAddonGroupsForItem(item);
+    if (groups.length > 0) setAddonItem(item);
+    else addToCartDirect(item, []);
+  };
+  const changeQty = (cartKey, delta) => setCart((c) => c.map((x) => (x.cartKey === cartKey ? { ...x, qty: x.qty + delta } : x)).filter((x) => x.qty > 0));
+  const lineTotal = (line) => (line.basePrice + line.addons.reduce((s, a) => s + a.price, 0)) * line.qty;
+  const cartTotal = cart.reduce((s, l) => s + lineTotal(l), 0);
+
+  const submitOrder = async () => {
+    if (!customerPhone || customerPhone.length < 9) {
+      alert("กรุณาใส่เบอร์โทรให้ครบ 9-10 หลัก");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const existing = await loadData("preorders", []);
+      const newPreorder = {
+        id: uid(),
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        pickupNote,
+        items: cart.map((x) => ({ id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x) })),
+        total: cartTotal,
+        status: "pending_confirm",
+        time: new Date().toISOString(),
+      };
+      await saveData("preorders", [newPreorder, ...existing]);
+      setSubmittedOrder(newPreorder);
+      setStep("done");
+    } catch (e) {
+      console.error(e);
+      alert("ส่งออเดอร์ไม่สำเร็จ ลองใหม่อีกครั้ง");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openCategory = (categories || []).find((c) => c.id === openCategoryId);
+  const itemsInOpenCategory = openCategoryId ? (menu || []).filter((m) => m.categoryId === openCategoryId) : [];
+  const ppPayload = settings.promptPayId ? generatePromptPayPayload(settings.promptPayId, cartTotal) : null;
+  const ppQrImg = ppPayload ? `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(ppPayload)}` : null;
+
+  return (
+    <div className="min-h-screen bg-[#fbf7f0]">
+      <header className="sticky top-0 z-20 text-[#fbf7f0] shadow-md py-3 px-4 flex items-center gap-2" style={{ backgroundColor: primary }}>
+        {settings.logoUrl ? (
+          <img src={settings.logoUrl} alt="logo" className="w-8 h-8 rounded-full object-cover" />
+        ) : (
+          <Coffee size={20} style={{ color: accent }} />
+        )}
+        <span className="font-bold">{SHOP_NAME} · สั่งล่วงหน้า</span>
+      </header>
+
+      <main className="max-w-md mx-auto px-4 py-5 pb-32">
+        {step === "menu" && (
+          <>
+            {!openCategoryId ? (
+              <>
+                <h2 className="font-bold text-lg mb-3">เลือกหมวดหมู่</h2>
+                <div className="grid grid-cols-2 gap-3">
+                  {(categories || []).map((cat) => (
+                    <button key={cat.id} onClick={() => setOpenCategoryId(cat.id)} className="text-left p-4 rounded-2xl border border-[#e3d2bd] bg-white shadow-sm">
+                      <div className="font-semibold">{cat.name}</div>
+                      <div className="text-xs text-[#8a7a68] mt-0.5">{(menu || []).filter((m) => m.categoryId === cat.id).length} เมนู</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <button onClick={() => setOpenCategoryId(null)} className="flex items-center gap-1 text-sm mb-3 font-medium" style={{ color: accent }}>
+                  <ChevronLeft size={16} /> กลับไปหมวดหมู่
+                </button>
+                <h2 className="font-bold text-lg mb-3">{openCategory?.name}</h2>
+                <div className="grid grid-cols-2 gap-3">
+                  {itemsInOpenCategory.map((item) => (
+                    <button key={item.id} onClick={() => handleItemClick(item)} className="text-left p-3 rounded-2xl border-2 border-[#f0e6da] bg-white shadow-sm active:scale-95 transition-all">
+                      {item.image ? (
+                        <img src={item.image} alt={item.name} className="w-full h-20 object-cover rounded-xl mb-2" onError={(e) => (e.target.style.display = "none")} />
+                      ) : (
+                        <div className="w-full h-20 rounded-xl mb-2 flex items-center justify-center" style={{ backgroundColor: `${accent}1a` }}>
+                          <Coffee size={22} style={{ color: accent }} />
+                        </div>
+                      )}
+                      <div className="font-semibold text-sm">{item.name}</div>
+                      <div className="font-bold mt-1" style={{ color: "#a6622f" }}>{THB(item.price)}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {step === "info" && (
+          <div>
+            <h2 className="font-bold text-lg mb-3">ข้อมูลผู้สั่ง</h2>
+            <div className="bg-white rounded-2xl border border-[#f0e6da] p-4 space-y-3">
+              <div>
+                <label className="text-xs text-[#8a7a68]">ชื่อ</label>
+                <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2.5 mt-1 text-sm" placeholder="เช่น คุณสมชาย" />
+              </div>
+              <div>
+                <label className="text-xs text-[#8a7a68]">เบอร์โทร (ใช้รับแต้มสะสมด้วย)</label>
+                <input
+                  value={customerPhone}
+                  onChange={(e) => setCustomerPhone(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                  inputMode="numeric"
+                  className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2.5 mt-1 text-sm"
+                  placeholder="0812345678"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[#8a7a68]">จะมารับเมื่อไหร่</label>
+                <div className="flex gap-2 mt-1 flex-wrap">
+                  {["ตอนนี้", "15 นาที", "30 นาที", "1 ชั่วโมง"].map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={() => setPickupNote(opt)}
+                      className="px-3 py-1.5 rounded-full text-xs font-medium border"
+                      style={pickupNote === opt ? { backgroundColor: primary, color: "#fff", borderColor: primary } : { borderColor: "#e3d2bd", color: "#5a4a3a" }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === "pay" && (
+          <div className="text-center">
+            <h2 className="font-bold text-lg mb-3">สแกนจ่ายเงิน</h2>
+            {ppQrImg ? (
+              <>
+                <img src={ppQrImg} alt="PromptPay QR" className="mx-auto rounded-xl border border-[#e3d2bd]" width={240} height={240} />
+                <p className="text-2xl font-extrabold mt-3" style={{ color: "#a6622f" }}>{THB(cartTotal)}</p>
+                <p className="text-xs text-[#8a7a68] mt-1">เปิดแอปธนาคารแล้วสแกน QR นี้เพื่อโอนเงิน</p>
+              </>
+            ) : (
+              <p className="text-sm text-red-500">ร้านยังไม่ได้ตั้งค่า PromptPay กรุณาติดต่อพนักงาน</p>
+            )}
+            <button
+              onClick={submitOrder}
+              disabled={submitting || !ppQrImg}
+              className="mt-6 w-full text-white rounded-xl py-3.5 font-semibold disabled:opacity-50"
+              style={{ backgroundColor: primary }}
+            >
+              {submitting ? "กำลังส่งออเดอร์..." : "✓ ฉันโอนเงินแล้ว"}
+            </button>
+          </div>
+        )}
+
+        {step === "done" && submittedOrder && (
+          <div className="text-center pt-6">
+            <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ backgroundColor: `${accent}22` }}>
+              <Check size={28} style={{ color: "#a6622f" }} />
+            </div>
+            <h2 className="font-bold text-xl">ส่งออเดอร์แล้ว!</h2>
+            <p className="text-sm text-[#8a7a68] mt-2">
+              ร้านจะตรวจสอบยอดโอนและเตรียมเครื่องดื่มให้ — มารับได้ตามเวลาที่แจ้งไว้ ({pickupNote})
+            </p>
+            <div className="bg-white rounded-2xl border border-[#f0e6da] p-4 mt-5 text-left">
+              {submittedOrder.items.map((it, i) => (
+                <div key={i} className="flex justify-between text-sm mb-1">
+                  <span>{it.name} x{it.qty}</span>
+                  <span>{THB(it.lineTotal)}</span>
+                </div>
+              ))}
+              <div className="border-t border-[#f0e6da] mt-2 pt-2 flex justify-between font-bold">
+                <span>รวม</span><span style={{ color: "#a6622f" }}>{THB(submittedOrder.total)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {step === "menu" && cart.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#f0e6da] p-4 shadow-lg">
+          <div className="max-w-md mx-auto">
+            <div className="flex items-center justify-between text-sm mb-2 max-h-24 overflow-y-auto">
+              <div className="space-y-1 flex-1">
+                {cart.map((line) => (
+                  <div key={line.cartKey} className="flex items-center justify-between">
+                    <span>{line.name} x{line.qty}</span>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => changeQty(line.cartKey, -1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center"><Minus size={12} /></button>
+                      <button onClick={() => changeQty(line.cartKey, 1)} className="w-6 h-6 rounded-full bg-[#f5f1ea] flex items-center justify-center"><Plus size={12} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between font-bold mb-2">
+              <span>รวม</span><span style={{ color: "#a6622f" }}>{THB(cartTotal)}</span>
+            </div>
+            <button onClick={() => setStep("info")} className="w-full text-white rounded-xl py-3 font-semibold" style={{ backgroundColor: primary }}>
+              ต่อไป
+            </button>
+          </div>
+        </div>
+      )}
+      {step === "info" && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#f0e6da] p-4 shadow-lg">
+          <div className="max-w-md mx-auto flex gap-2">
+            <button onClick={() => setStep("menu")} className="flex-1 border border-[#e3d2bd] rounded-xl py-3 font-medium">กลับ</button>
+            <button
+              onClick={() => (customerPhone.length >= 9 ? setStep("pay") : alert("กรุณาใส่เบอร์โทรให้ครบ"))}
+              className="flex-1 text-white rounded-xl py-3 font-semibold"
+              style={{ backgroundColor: primary }}
+            >
+              ไปจ่ายเงิน
+            </button>
+          </div>
+        </div>
+      )}
+
+      {addonItem && (
+        <AddonModal
+          item={addonItem}
+          groups={resolvedAddonGroupsForItem(addonItem)}
+          basePrice={addonItem.price}
+          onClose={() => setAddonItem(null)}
+          onConfirm={(chosenAddons) => {
+            addToCartDirect(addonItem, chosenAddons);
+            setAddonItem(null);
+          }}
+        />
+      )}
     </div>
   );
 }
