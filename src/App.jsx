@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Coffee, Plus, Minus, Trash2, Package, Receipt, AlertTriangle, X, Check,
   TrendingUp, Edit2, Printer, ChevronLeft, ChevronRight, Settings, Bike, Store,
-  Image as ImageIcon, Wallet, Users, QrCode, Star, Phone, ClipboardList, Smartphone,
+  Image as ImageIcon, Wallet, ClipboardList,
 } from "lucide-react";
 
 // ============================================================
@@ -42,18 +42,29 @@ function ppField(id, value) {
   return `${id}${String(value.length).padStart(2, "0")}${value}`;
 }
 function ppSanitizeTarget(target) {
-  let s = target.replace(/[^0-9]/g, "");
-  if (s.length >= 13) return s.substring(0, 13);
-  s = s.substring(s.length - 9);
-  return `0066${s}`;
+  const raw = target.replace(/[^0-9]/g, "");
+  if (/^0[0-9]{9}$/.test(raw)) {
+    // เบอร์โทรศัพท์ 10 หลัก ขึ้นต้นด้วย 0 -> proxy type "01" (mobile)
+    return { value: `0066${raw.slice(1)}`, tag: "01" };
+  }
+  if (/^[0-9]{13}$/.test(raw)) {
+    // เลขบัตรประชาชน/เลขผู้เสียภาษี 13 หลัก -> proxy type "02" (national ID)
+    return { value: raw, tag: "02" };
+  }
+  // เผื่อกรณีเบอร์ไม่มีเลข 0 นำหน้า (9 หลัก) ก็ถือเป็นเบอร์โทรเช่นกัน
+  if (/^[0-9]{9}$/.test(raw)) {
+    return { value: `0066${raw}`, tag: "01" };
+  }
+  return null;
 }
 function generatePromptPayPayload(target, amount) {
   if (!target) return null;
-  const formattedTarget = ppSanitizeTarget(target);
+  const sanitized = ppSanitizeTarget(target);
+  if (!sanitized) return null;
   let data =
     ppField("00", "01") +
     ppField("01", amount ? "12" : "11") +
-    ppField("29", ppField("00", "A000000677010111") + ppField(formattedTarget.length === 13 ? "02" : "01", formattedTarget)) +
+    ppField("29", ppField("00", "A000000677010111") + ppField(sanitized.tag, sanitized.value)) +
     ppField("58", "TH");
   if (amount) data += ppField("54", Number(amount).toFixed(2));
   data += "6304";
@@ -101,9 +112,6 @@ const DEFAULT_SETTINGS = {
   addonGroups: DEFAULT_ADDON_GROUPS,
   walkinReset: "day", // day | month | year | never
   orderCounters: {},  // { walkin: {key, count}, grab: {count}, ... }
-  pointsPerItem: 1,    // ได้กี่แต้มต่อ 1 แก้วที่ขาย
-  redeemThreshold: 10, // ครบกี่แต้มแลกแก้วฟรีได้ 1 แก้ว
-  freeDrinkValue: 50,  // มูลค่าแก้วฟรีสูงสุด (บาท) ถ้าราคาเกินนี้ลูกค้าจ่ายส่วนต่าง
   promptPayId: "",     // เบอร์โทร/เลขบัตรประชาชน PromptPay ของร้าน สำหรับรับเงินสั่งล่วงหน้า
 };
 
@@ -141,11 +149,7 @@ async function uploadImage(file, bucket = "menu-images") {
 
 export default function CoffeeShopSystem() {
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-  const customerPhoneParam = params?.get("customer");
   const isPreorderView = params?.get("preorder") === "1";
-  if (customerPhoneParam) {
-    return <CustomerPointsView phone={customerPhoneParam} />;
-  }
   if (isPreorderView) {
     return <PreOrderView />;
   }
@@ -185,25 +189,18 @@ function CoffeeShopAdminApp() {
   const [editExpense, setEditExpense] = useState(null);
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [accountingRange, setAccountingRange] = useState("today"); // today | week | month | all
-  const [customers, setCustomers] = useState(null);
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [editCustomer, setEditCustomer] = useState(null);
-  const [qrCustomer, setQrCustomer] = useState(null);
-  const [customerSearch, setCustomerSearch] = useState("");
-  const [redeemMode, setRedeemMode] = useState(false);
   const [preorders, setPreorders] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
-        let [m, c, s, sl, st, ex, cu, po] = await Promise.all([
+        let [m, c, s, sl, st, ex, po] = await Promise.all([
           loadData("menu", null),
           loadData("categories", null),
           loadData("stock", null),
           loadData("sales", null),
           loadData("settings", null),
           loadData("expenses", null),
-          loadData("customers", null),
           loadData("preorders", null),
         ]);
         if (m === null) { m = DEFAULT_MENU; await saveData("menu", m); }
@@ -212,7 +209,6 @@ function CoffeeShopAdminApp() {
         if (sl === null) { sl = []; await saveData("sales", sl); }
         if (st === null) { st = DEFAULT_SETTINGS; await saveData("settings", st); }
         if (ex === null) { ex = []; await saveData("expenses", ex); }
-        if (cu === null) { cu = []; await saveData("customers", cu); }
         if (po === null) { po = []; await saveData("preorders", po); }
         // migrate: ensure new settings fields exist for older saved settings
         let mergedChannels = st.channels || DEFAULT_CHANNELS;
@@ -226,9 +222,6 @@ function CoffeeShopAdminApp() {
           addonGroups: st.addonGroups || DEFAULT_ADDON_GROUPS,
           walkinReset: st.walkinReset || "day",
           orderCounters: st.orderCounters || {},
-          pointsPerItem: st.pointsPerItem || 1,
-          redeemThreshold: st.redeemThreshold || 10,
-          freeDrinkValue: st.freeDrinkValue ?? 50,
           promptPayId: st.promptPayId || "",
         };
         setMenu(m);
@@ -237,7 +230,6 @@ function CoffeeShopAdminApp() {
         setSales(sl);
         setSettings(st);
         setExpenses(ex);
-        setCustomers(cu);
         setPreorders(po);
       } catch (e) {
         console.error(e);
@@ -260,7 +252,6 @@ function CoffeeShopAdminApp() {
         if (row.key === "sales") setSales(row.value);
         if (row.key === "settings") setSettings(row.value);
         if (row.key === "expenses") setExpenses(row.value);
-        if (row.key === "customers") setCustomers(row.value);
         if (row.key === "preorders") setPreorders(row.value);
       })
       .subscribe();
@@ -277,22 +268,6 @@ function CoffeeShopAdminApp() {
     (stock || []).forEach((s) => (map[s.id] = s));
     return map;
   }, [stock]);
-
-  const foundCustomer = useMemo(() => {
-    if (!customerPhone || customerPhone.length < 9) return null;
-    return (customers || []).find((c) => c.phone === customerPhone) || null;
-  }, [customers, customerPhone]);
-
-  const frequentItemsForCustomer = (customer) => {
-    if (!customer?.history) return [];
-    const counts = {};
-    customer.history.forEach((h) => (h.items || []).forEach((it) => { counts[it.id] = (counts[it.id] || 0) + it.qty; }));
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([id]) => menu.find((m) => m.id === id))
-      .filter(Boolean);
-  };
 
   const channels = settings?.channels || DEFAULT_CHANNELS;
   const addonGroupsLib = settings?.addonGroups || [];
@@ -317,16 +292,12 @@ function CoffeeShopAdminApp() {
 
   // ---- Cart ----
   const addToCartDirect = (item, addons = [], unitPrice) => {
-    const isRedeem = redeemMode;
-    const freeValue = settings.freeDrinkValue ?? 50;
-    const finalPrice = isRedeem ? Math.max(0, unitPrice - freeValue) : unitPrice;
-    const cartKey = item.id + "::" + addons.map((a) => a.id).sort().join(",") + (isRedeem ? "::redeemed" : "");
+    const cartKey = item.id + "::" + addons.map((a) => a.id).sort().join(",");
     setCart((c) => {
       const ex = c.find((x) => x.cartKey === cartKey);
       if (ex) return c.map((x) => (x.cartKey === cartKey ? { ...x, qty: x.qty + 1 } : x));
-      return [...c, { cartKey, id: item.id, name: item.name, basePrice: finalPrice, originalPrice: unitPrice, addons, qty: 1, redeemed: isRedeem }];
+      return [...c, { cartKey, id: item.id, name: item.name, basePrice: unitPrice, addons, qty: 1 }];
     });
-    if (isRedeem) setRedeemMode(false);
   };
 
   const resolvedAddonGroupsForItem = (item) =>
@@ -366,7 +337,6 @@ function CoffeeShopAdminApp() {
     setChannel(chId);
     setCart([]);
     setChannelRef("");
-    setRedeemMode(false);
   };
 
   // ---- เลขออเดอร์: หน้าร้านเรียง 1,2,3... รีเซ็ตตามรอบ / ช่องทางอื่นใช้เลขจากแอปจริงที่พนักงานพิมพ์ ----
@@ -416,76 +386,30 @@ function CoffeeShopAdminApp() {
       });
     }
     const { display: orderNumber, newCounters } = getNextOrderNumber(channel, channelRef);
-    const redeemedQty = cart.filter((l) => l.redeemed).reduce((s, l) => s + l.qty, 0);
-    const redeemThreshold = settings.redeemThreshold || 10;
-    const pointsUsed = redeemedQty * redeemThreshold;
-    const phone = customerPhone.trim();
-    const isLinkedCustomer = phone.length >= 9;
-
-    if (redeemedQty > 0) {
-      if (!isLinkedCustomer) {
-        alert("ต้องใส่เบอร์โทรลูกค้าก่อนถึงจะแลกแต้มได้");
-        return;
-      }
-      const existing = customers.find((c) => c.phone === phone);
-      if (!existing || (existing.points || 0) < pointsUsed) {
-        alert(`ลูกค้าแต้มไม่พอ ต้องใช้ ${pointsUsed} แต้ม แต่มี ${existing?.points || 0} แต้ม`);
-        return;
-      }
-    }
-
-    const earnedQty = cart.filter((l) => !l.redeemed).reduce((s, l) => s + l.qty, 0);
-    const pointsPerItem = settings.pointsPerItem ?? 1;
-    let pointsEarned = 0;
-    let newCustomers = customers;
-    if (isLinkedCustomer) {
-      pointsEarned = earnedQty * pointsPerItem;
-      const netPoints = pointsEarned - pointsUsed;
-      const existing = customers.find((c) => c.phone === phone);
-      const historyEntry = { time: new Date().toISOString(), items: cart.map((x) => ({ id: x.id, name: x.name, qty: x.qty })), total: cartTotal };
-      if (existing) {
-        newCustomers = customers.map((c) =>
-          c.phone === phone
-            ? { ...c, points: Math.max(0, (c.points || 0) + netPoints), history: [historyEntry, ...(c.history || [])].slice(0, 30) }
-            : c
-        );
-      } else {
-        newCustomers = [...customers, { id: uid(), phone, name: "", points: Math.max(0, pointsEarned), history: [historyEntry] }];
-      }
-    }
     const order = {
       id: uid(),
       orderNumber,
       channel,
       items: cart.map((x) => ({
-        id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x), redeemed: x.redeemed || false,
+        id: x.id, name: x.name, price: x.basePrice, addons: x.addons, qty: x.qty, lineTotal: lineTotal(x),
       })),
       total: cartTotal,
       cogs: Math.round(cogs * 100) / 100,
       time: new Date().toISOString(),
-      customerPhone: isLinkedCustomer ? phone : null,
-      pointsEarned,
-      pointsUsed,
     };
     const newSales = [order, ...sales];
     const newSettings = { ...settings, orderCounters: newCounters };
     setStock(newStock);
     setSales(newSales);
     setSettings(newSettings);
-    setCustomers(newCustomers);
     setCart([]);
     setChannelRef("");
-    setCustomerPhone("");
     await Promise.all([
       saveData("stock", newStock),
       saveData("sales", newSales),
       saveData("settings", newSettings),
-      saveData("customers", newCustomers),
     ]);
-    let msg = `บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber}`;
-    if (pointsUsed > 0) msg += ` · แลกแต้มไป ${pointsUsed}`;
-    if (pointsEarned > 0) msg += ` · ได้ ${pointsEarned} แต้ม`;
-    showToast(msg);
+    showToast(`บันทึกการขายแล้ว · เลขออเดอร์ ${orderNumber}`);
     setReceiptOrder(order);
   };
 
@@ -495,21 +419,6 @@ function CoffeeShopAdminApp() {
     await saveData("sales", newSales);
     setConfirmDeleteOrder(null);
     showToast("ลบรายการแล้ว");
-  };
-
-  // ---- Customer ops ----
-  const saveCustomer = async (cust) => {
-    const newCustomers = customers.map((c) => (c.id === cust.id ? { ...c, name: cust.name } : c));
-    setCustomers(newCustomers);
-    await saveData("customers", newCustomers);
-    setEditCustomer(null);
-    showToast("บันทึกข้อมูลลูกค้าแล้ว");
-  };
-  const deleteCustomer = async (id) => {
-    if (!window.confirm("ลบลูกค้าคนนี้และแต้มสะสมทั้งหมด?")) return;
-    const newCustomers = customers.filter((c) => c.id !== id);
-    setCustomers(newCustomers);
-    await saveData("customers", newCustomers);
   };
 
   // ---- Preorder ops ----
@@ -542,26 +451,6 @@ function CoffeeShopAdminApp() {
     const orderNumber = `PO-${String(nextNum).padStart(3, "0")}`;
     const newCounters = { ...counters, preorder: { count: nextNum } };
 
-    let pointsEarned = 0;
-    let newCustomers = customers;
-    const phone = po.customerPhone;
-    if (phone) {
-      const pointsPerItem = settings.pointsPerItem ?? 1;
-      const qtySum = po.items.reduce((s, l) => s + l.qty, 0);
-      pointsEarned = qtySum * pointsPerItem;
-      const existing = customers.find((c) => c.phone === phone);
-      const historyEntry = { time: new Date().toISOString(), items: po.items.map((x) => ({ id: x.id, name: x.name, qty: x.qty })), total: po.total };
-      if (existing) {
-        newCustomers = customers.map((c) =>
-          c.phone === phone
-            ? { ...c, name: c.name || po.customerName || "", points: (c.points || 0) + pointsEarned, history: [historyEntry, ...(c.history || [])].slice(0, 30) }
-            : c
-        );
-      } else {
-        newCustomers = [...customers, { id: uid(), phone, name: po.customerName || "", points: pointsEarned, history: [historyEntry] }];
-      }
-    }
-
     const order = {
       id: uid(),
       orderNumber,
@@ -570,9 +459,6 @@ function CoffeeShopAdminApp() {
       total: po.total,
       cogs: Math.round(cogs * 100) / 100,
       time: new Date().toISOString(),
-      customerPhone: phone || null,
-      pointsEarned,
-      pointsUsed: 0,
     };
 
     const newSales = [order, ...sales];
@@ -582,14 +468,12 @@ function CoffeeShopAdminApp() {
     setStock(newStock);
     setSales(newSales);
     setSettings(newSettings);
-    setCustomers(newCustomers);
     setPreorders(newPreorders);
 
     await Promise.all([
       saveData("stock", newStock),
       saveData("sales", newSales),
       saveData("settings", newSettings),
-      saveData("customers", newCustomers),
       saveData("preorders", newPreorders),
     ]);
     showToast(`ยืนยันออเดอร์ ${orderNumber} แล้ว`);
@@ -765,7 +649,6 @@ function CoffeeShopAdminApp() {
               ["menu", "เมนู", Coffee],
               ["report", "รายงาน", TrendingUp],
               ["accounting", "บัญชี", Wallet],
-              ["customers", "ลูกค้า", Users],
               ["preorders", "ออเดอร์ล่วงหน้า", ClipboardList],
               ["settings", "ตั้งค่า", Settings],
             ].map(([key, label, Icon]) => (
@@ -903,56 +786,6 @@ function CoffeeShopAdminApp() {
                 </div>
               )}
 
-              <div className="mb-3">
-                <label className="text-xs text-[#8a7a68] flex items-center gap-1"><Phone size={11} /> เบอร์โทรลูกค้า (ไม่บังคับ)</label>
-                <input
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
-                  placeholder="0812345678"
-                  inputMode="numeric"
-                  className="w-full border border-[#e3d2bd] rounded-xl px-3 py-2.5 mt-1 text-sm focus:outline-none focus:ring-2"
-                  style={{ "--tw-ring-color": accent }}
-                />
-                {foundCustomer && (
-                  <div className="mt-2 p-2.5 rounded-xl text-sm" style={{ backgroundColor: `${accent}1a` }}>
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold flex items-center gap-1"><Star size={13} style={{ color: accent }} /> {foundCustomer.name || "ลูกค้าประจำ"}</span>
-                      <span className="font-bold" style={{ color: "#a6622f" }}>{foundCustomer.points || 0} แต้ม</span>
-                    </div>
-                    {(foundCustomer.points || 0) >= (settings.redeemThreshold || 10) && (
-                      <button
-                        onClick={() => setRedeemMode((v) => !v)}
-                        className="mt-2 w-full text-xs font-semibold py-2 rounded-lg border-2 transition-all"
-                        style={redeemMode ? { backgroundColor: "#a6622f", color: "#fff", borderColor: "#a6622f" } : { borderColor: "#a6622f", color: "#a6622f" }}
-                      >
-                        {redeemMode ? "กำลังแลกแก้วฟรี — กดเลือกเมนู" : `🎁 ใช้ ${settings.redeemThreshold || 10} แต้ม แลกแก้วฟรี`}
-                      </button>
-                    )}
-                    {frequentItemsForCustomer(foundCustomer).length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {frequentItemsForCustomer(foundCustomer).map((mi) => (
-                          <button
-                            key={mi.id}
-                            onClick={() => handleItemClick(mi)}
-                            className="text-xs px-2.5 py-1.5 rounded-full bg-white border border-[#e3d2bd] font-medium active:scale-95 transition-all"
-                          >
-                            + {mi.name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {customerPhone.length >= 9 && !foundCustomer && (
-                  <p className="text-[11px] text-[#8a7a68] mt-1.5">ลูกค้าใหม่ — จะสร้างให้อัตโนมัติตอนชำระเงิน</p>
-                )}
-              </div>
-              {redeemMode && (
-                <div className="mb-3 -mt-1 px-3 py-2 rounded-lg text-xs font-medium text-center" style={{ backgroundColor: "#fdf0e4", color: "#9a5a1e" }}>
-                  เลือกเมนูที่ต้องการแลก 1 แก้ว — ถ้าราคาเกิน {THB(settings.freeDrinkValue ?? 50)} ลูกค้าจ่ายส่วนต่าง
-                </div>
-              )}
-
               {cart.length === 0 ? (
                 <div className="py-10 text-center text-[#8a7a68]">
                   <Receipt size={26} className="mx-auto mb-2 opacity-30" />
@@ -963,17 +796,9 @@ function CoffeeShopAdminApp() {
                   {cart.map((line) => (
                     <div key={line.cartKey} className="flex items-center justify-between text-sm pb-2 border-b border-[#f5f1ea] last:border-0 last:pb-0">
                       <div className="flex-1 pr-2">
-                        <div className="font-medium flex items-center gap-1.5">
-                          {line.name}
-                          {line.redeemed && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#a6622f", color: "#fff" }}>🎁 แลกแต้ม</span>}
-                        </div>
+                        <div className="font-medium">{line.name}</div>
                         {line.addons.length > 0 && <div className="text-[11px] text-[#8a7a68]">{line.addons.map((a) => a.name).join(", ")}</div>}
-                        <div className="text-[#8a7a68]">
-                          {line.redeemed && line.originalPrice > line.basePrice && (
-                            <span className="line-through mr-1.5 opacity-60">{THB(line.originalPrice)}</span>
-                          )}
-                          {THB(line.basePrice + line.addons.reduce((s, a) => s + a.price, 0))}
-                        </div>
+                        <div className="text-[#8a7a68]">{THB(line.basePrice + line.addons.reduce((s, a) => s + a.price, 0))}</div>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <button onClick={() => changeQty(line.cartKey, -1)} className="w-7 h-7 rounded-full bg-[#f5f1ea] flex items-center justify-center hover:bg-[#e3d2bd] active:scale-90 transition-all"><Minus size={13} /></button>
@@ -1167,63 +992,6 @@ function CoffeeShopAdminApp() {
           />
         )}
 
-        {tab === "customers" && (
-          <div>
-            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-              <h2 className="font-bold text-lg">ลูกค้าประจำ</h2>
-              <input
-                value={customerSearch}
-                onChange={(e) => setCustomerSearch(e.target.value)}
-                placeholder="ค้นหาเบอร์โทรหรือชื่อ"
-                className="border border-[#e3d2bd] rounded-xl px-3 py-2 text-sm w-56"
-              />
-            </div>
-            <p className="text-xs text-[#8a7a68] mb-4">
-              ลูกค้าจะถูกสร้างอัตโนมัติเมื่อพนักงานใส่เบอร์โทรตอนขายในหน้า "ขายหน้าร้าน" — แต้มสะสมตามอัตราที่ตั้งไว้ในแท็บ "ตั้งค่า"
-            </p>
-            <div className="bg-white rounded-2xl border border-[#f0e6da] overflow-hidden">
-              {(customers || []).filter((c) => !customerSearch || c.phone.includes(customerSearch) || (c.name || "").includes(customerSearch)).length === 0 ? (
-                <div className="py-12 text-center text-[#8a7a68]">
-                  <Users size={26} className="mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">ยังไม่มีลูกค้าในระบบ</p>
-                </div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="bg-[#f5f1ea] text-[#8a7a68]">
-                    <tr>
-                      <th className="text-left px-4 py-2">เบอร์โทร</th>
-                      <th className="text-left px-4 py-2">ชื่อ</th>
-                      <th className="text-right px-4 py-2">แต้มสะสม</th>
-                      <th className="text-right px-4 py-2">สั่งล่าสุด</th>
-                      <th className="px-4 py-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {customers
-                      .filter((c) => !customerSearch || c.phone.includes(customerSearch) || (c.name || "").includes(customerSearch))
-                      .sort((a, b) => (b.points || 0) - (a.points || 0))
-                      .map((c) => (
-                        <tr key={c.id} className="border-t border-[#f0e6da]">
-                          <td className="px-4 py-2 font-medium">{c.phone}</td>
-                          <td className="px-4 py-2 text-[#8a7a68]">{c.name || <span className="italic text-[#cbb9a8]">ยังไม่ระบุ</span>}</td>
-                          <td className="px-4 py-2 text-right font-bold" style={{ color: "#a6622f" }}>{c.points || 0}</td>
-                          <td className="px-4 py-2 text-right text-[#8a7a68] whitespace-nowrap">
-                            {c.history?.[0]?.time ? new Date(c.history[0].time).toLocaleDateString("th-TH") : "—"}
-                          </td>
-                          <td className="px-4 py-2 text-right whitespace-nowrap">
-                            <button onClick={() => setQrCustomer(c)} className="mr-2" style={{ color: "#a6622f" }} title="QR สะสมแต้ม"><QrCode size={15} /></button>
-                            <button onClick={() => setEditCustomer(c)} className="mr-2" style={{ color: "#a6622f" }} title="แก้ไขชื่อ"><Edit2 size={15} /></button>
-                            <button onClick={() => deleteCustomer(c.id)} className="text-red-400 hover:text-red-600" title="ลบ"><Trash2 size={15} /></button>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        )}
-
         {tab === "preorders" && (
           <div>
             <h2 className="font-bold text-lg mb-1">ออเดอร์ล่วงหน้า</h2>
@@ -1325,46 +1093,6 @@ function CoffeeShopAdminApp() {
                       {label}
                     </button>
                   ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Loyalty points */}
-            <div>
-              <h2 className="font-bold text-lg mb-3">ระบบสะสมแต้ม</h2>
-              <div className="bg-white rounded-xl border border-[#e3d2bd] p-4 space-y-3">
-                <p className="text-xs text-[#8a7a68]">
-                  ลูกค้าได้แต้มทุกครั้งที่ซื้อโดยใส่เบอร์โทรตอนขาย เมื่อแต้มครบจะแลกแก้วฟรีได้ในหน้าขายหน้าร้าน
-                </p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-[#5a4a3a] w-44">ได้แต้มต่อแก้วที่ขาย</span>
-                  <input
-                    type="number"
-                    value={settings.pointsPerItem ?? 1}
-                    onChange={(e) => updateSettings({ pointsPerItem: Number(e.target.value) || 0 })}
-                    className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-center"
-                  />
-                  <span className="text-sm text-[#5a4a3a]">แต้ม / แก้ว</span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-[#5a4a3a] w-44">ครบกี่แต้มแลกแก้วฟรี</span>
-                  <input
-                    type="number"
-                    value={settings.redeemThreshold ?? 10}
-                    onChange={(e) => updateSettings({ redeemThreshold: Number(e.target.value) || 1 })}
-                    className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-center"
-                  />
-                  <span className="text-sm text-[#5a4a3a]">แต้ม</span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-[#5a4a3a] w-44">มูลค่าแก้วฟรีสูงสุด</span>
-                  <input
-                    type="number"
-                    value={settings.freeDrinkValue ?? 50}
-                    onChange={(e) => updateSettings({ freeDrinkValue: Number(e.target.value) || 0 })}
-                    className="w-20 border border-[#e3d2bd] rounded-lg px-2 py-1.5 text-sm text-center"
-                  />
-                  <span className="text-sm text-[#5a4a3a]">บาท (เกินนี้ลูกค้าจ่ายส่วนต่าง)</span>
                 </div>
               </div>
             </div>
@@ -1536,12 +1264,6 @@ function CoffeeShopAdminApp() {
           onClose={() => { setEditExpense(null); setShowAddExpense(false); }}
           onSave={saveExpense}
         />
-      )}
-      {editCustomer && (
-        <CustomerEditModal item={editCustomer} onClose={() => setEditCustomer(null)} onSave={saveCustomer} />
-      )}
-      {qrCustomer && (
-        <CustomerQrModal customer={qrCustomer} onClose={() => setQrCustomer(null)} />
       )}
     </div>
   );
@@ -2068,13 +1790,6 @@ function ReceiptModal({ order, channels, settings, onClose }) {
           <div className="flex justify-between font-bold text-base">
             <span>รวม</span><span>{THB(order.total)}</span>
           </div>
-          {order.customerPhone && (
-            <div className="text-xs text-[#8a7a68] mt-2 pt-2 border-t border-dashed border-[#999]">
-              ลูกค้า: {order.customerPhone}
-              {order.pointsUsed > 0 && <> · แลกแต้มไป <strong>{order.pointsUsed}</strong></>}
-              {order.pointsEarned > 0 && <> · ได้แต้มสะสม <strong>{order.pointsEarned}</strong></>}
-            </div>
-          )}
           <div className="text-center text-xs text-[#8a7a68] mt-4">ขอบคุณที่ใช้บริการ</div>
         </div>
         <div className="no-print flex gap-2 p-4 pt-0">
@@ -2231,118 +1946,6 @@ function ExpenseModal({ item, defaultDate, onClose, onSave }) {
         >
           บันทึก
         </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Modal: แก้ไขชื่อลูกค้า ----------
-function CustomerEditModal({ item, onClose, onSave }) {
-  const [name, setName] = useState(item?.name || "");
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl p-5 w-full max-w-sm">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold">แก้ไขข้อมูลลูกค้า</h3>
-          <button onClick={onClose}><X size={18} /></button>
-        </div>
-        <p className="text-xs text-[#8a7a68] mb-3">เบอร์โทร: {item.phone}</p>
-        <label className="text-xs text-[#8a7a68]">ชื่อลูกค้า</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น คุณสมชาย" className="w-full border border-[#e3d2bd] rounded-lg px-3 py-2 mt-1 text-sm" />
-        <button onClick={() => onSave({ ...item, name })} className="mt-4 w-full bg-[#2b1d14] text-white rounded-lg py-2.5 font-semibold text-sm">บันทึก</button>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Modal: QR สะสมแต้มของลูกค้า ----------
-function CustomerQrModal({ customer, onClose }) {
-  const pointsUrl = `${window.location.origin}${window.location.pathname}?customer=${encodeURIComponent(customer.phone)}`;
-  const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pointsUrl)}`;
-
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl p-5 w-full max-w-sm text-center">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold">QR สะสมแต้ม</h3>
-          <button onClick={onClose}><X size={18} /></button>
-        </div>
-        <p className="text-sm text-[#8a7a68] mb-3">{customer.name || "ลูกค้า"} · {customer.phone}</p>
-        <img src={qrImg} alt="QR points" className="mx-auto rounded-lg border border-[#e3d2bd]" width={240} height={240} />
-        <p className="text-xs text-[#8a7a68] mt-3">ให้ลูกค้าสแกนเพื่อดูแต้มสะสมของตัวเอง — บันทึกรูปหรือพิมพ์แจกลูกค้าได้</p>
-        <p className="text-[11px] text-[#cbb9a8] mt-1 break-all">{pointsUrl}</p>
-      </div>
-    </div>
-  );
-}
-
-// ---------- หน้าลูกค้าดูแต้มของตัวเอง (เข้าผ่านลิงก์ QR ไม่ต้อง login) ----------
-function CustomerPointsView({ phone }) {
-  const [customer, setCustomer] = useState(null);
-  const [notFound, setNotFound] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const list = await loadData("customers", []);
-        const found = (list || []).find((c) => c.phone === phone);
-        if (found) setCustomer(found);
-        else setNotFound(true);
-      } catch (e) {
-        console.error(e);
-        setNotFound(true);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [phone]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1c1410]">
-        <div className="w-10 h-10 rounded-full border-2 border-[#d4a574]/30 border-t-[#d4a574] animate-spin" />
-      </div>
-    );
-  }
-
-  if (notFound) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fbf7f0] p-6">
-        <div className="text-center">
-          <Users size={32} className="mx-auto mb-3 text-[#cbb9a8]" />
-          <p className="text-[#5a4a3a]">ไม่พบข้อมูลลูกค้า เบอร์ {phone}</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#fbf7f0] flex items-center justify-center p-6">
-      <div className="bg-white rounded-3xl shadow-lg p-8 w-full max-w-sm text-center border border-[#f0e6da]">
-        <div className="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" style={{ backgroundColor: "#d4a57422" }}>
-          <Star size={28} style={{ color: "#a6622f" }} />
-        </div>
-        <h1 className="font-bold text-xl" style={{ color: "#2b1d14" }}>{SHOP_NAME}</h1>
-        <p className="text-sm text-[#8a7a68] mt-1">{customer.name || "ลูกค้าประจำ"} · {customer.phone}</p>
-        <div className="mt-6">
-          <div className="text-5xl font-extrabold" style={{ color: "#a6622f" }}>{customer.points || 0}</div>
-          <div className="text-sm text-[#8a7a68] mt-1">แต้มสะสม</div>
-        </div>
-        {customer.history?.length > 0 && (
-          <div className="mt-6 text-left">
-            <div className="text-xs font-semibold text-[#8a7a68] mb-2">การสั่งล่าสุด</div>
-            <div className="space-y-1.5">
-              {customer.history.slice(0, 5).map((h, i) => (
-                <div key={i} className="text-xs text-[#5a4a3a] flex justify-between border-b border-[#f5f1ea] pb-1.5">
-                  <span>{h.items.map((it) => it.name).join(", ")}</span>
-                  <span className="text-[#8a7a68] flex-shrink-0 ml-2">{new Date(h.time).toLocaleDateString("th-TH")}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        <p className="text-[11px] text-[#cbb9a8] mt-6">แจ้งพนักงานเพื่อใช้แต้มแลกของได้ที่หน้าร้าน</p>
       </div>
     </div>
   );
